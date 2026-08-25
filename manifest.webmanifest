@@ -1,0 +1,17 @@
+{
+  "name": "Courtside",
+  "short_name": "Courtside",
+  "description": "Volleyball stats, rotations, lineups and subs. Works with no signal.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0A0C11",
+  "theme_color": "#0A0C11",
+  "categories": ["sports", "productivity"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

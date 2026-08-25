@@ -1,0 +1,457 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Courtside — self test</title>
+<style>
+  body{background:#0C0F1C;color:#E9EEFB;font:13px ui-monospace,Menlo,Consolas,monospace;margin:0;padding:16px}
+  h1{font-size:15px;margin:0 0 4px}
+  .sub{color:#8B96B8;font-size:12px;margin-bottom:12px}
+  #wrap{display:flex;gap:16px;align-items:flex-start}
+  #out{flex:1;min-width:0}
+  .grp{margin:12px 0 4px;color:#6E7BFF;font-weight:700;border-bottom:1px solid #2C3659;padding-bottom:3px}
+  .p{color:#3DDC97}
+  .f{color:#EA4C60;font-weight:700}
+  .d{color:#8B96B8}
+  #sum{position:sticky;top:0;background:#0C0F1C;padding:8px 0;font-size:15px;font-weight:700;z-index:2}
+  iframe{width:390px;height:660px;border:2px solid #333;border-radius:16px;background:#0A0C11;flex:none}
+</style>
+</head>
+<body>
+<h1>Courtside — self test</h1>
+<div class="sub">Drives the real app in the frame beside these results. Whatever is saved on this
+device is backed up before the run and restored at the end.</div>
+<div id="sum">running…</div>
+<div id="wrap">
+  <div id="out"></div>
+  <iframe id="app" src="../index.html"></iframe>
+</div>
+
+<script>
+const out = document.getElementById('out');
+const sum = document.getElementById('sum');
+let pass = 0, fail = 0;
+
+const LS_KEY = 'courtside:v1';
+const BACKUP = localStorage.getItem(LS_KEY);
+
+function grp(name){ const d=document.createElement('div'); d.className='grp'; d.textContent=name; out.appendChild(d); }
+function ok(name, cond, detail){
+  const d=document.createElement('div');
+  d.className = cond ? 'p' : 'f';
+  d.textContent = (cond?'  PASS  ':'  FAIL  ') + name;
+  if(detail){ const s=document.createElement('span'); s.className='d'; s.textContent='   ['+detail+']'; d.appendChild(s); }
+  out.appendChild(d);
+  cond ? pass++ : fail++;
+  return cond;
+}
+const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+const F = ()=>document.getElementById('app');
+async function reloadApp(){
+  const f = F();
+  await new Promise(res=>{ f.onload = res; f.contentWindow.location.reload(); });
+  for(let i=0;i<80 && !f.contentWindow.CS;i++) await sleep(50);
+  await sleep(200);
+  return f.contentWindow.CS;
+}
+async function waitApp(){
+  const f = F();
+  for(let i=0;i<80 && !(f.contentWindow && f.contentWindow.CS);i++) await sleep(50);
+  await sleep(200);
+  return f.contentWindow.CS;
+}
+/* a roster we control, so assertions do not depend on whatever is saved */
+function seedRoster(CS){
+  CS.S.roster = Array.from({length:12},(_,i)=>({id:'p'+i,name:'P'+i,number:String(i+1),positions:[i===0?'S':'OH']}));
+  CS.S.lineup = { system:'5-1', order:['p0','p1','p2','p3','p4','p5'] };
+  CS.S.sets = [CS.emptySet()];
+  CS.S.curSet = 0; CS.S.log = []; CS.S.subLog = [];
+  CS.commit();
+}
+
+(async function run(){
+  let CS = await waitApp();
+
+  /* ---------------------------------------------------------------- */
+  grp('1. boot & storage');
+  ok('app booted', !!CS);
+  ok('localStorage available', CS.Store.health.lsOK);
+  ok('IndexedDB available', CS.Store.health.idbOK);
+  ok('service worker controlling (offline armed)',
+     !!F().contentWindow.navigator.serviceWorker.controller,
+     'false is expected on file:// only');
+
+  /* ---------------------------------------------------------------- */
+  grp('2. rotation geometry — the flagged top risk');
+  const Z = CS.zoneForServeOrder;
+  for(let rot=0; rot<6; rot++){
+    const zones = [1,2,3,4,5,6].map(o=>Z(o,rot));
+    ok('rotation '+(rot+1)+' puts six players in six distinct zones',
+       new Set(zones).size===6 && zones.every(z=>z>=1&&z<=6), zones.join(','));
+  }
+  ok('rotation 1 is the identity (serve order N stands in zone N)',
+     [1,2,3,4,5,6].every(o=>Z(o,0)===o));
+  const CW = {2:1,1:6,6:5,5:4,4:3,3:2};
+  let cwOK = true, cwWhy = '';
+  for(let rot=0; rot<6; rot++) for(let o=1;o<=6;o++){
+    const a=Z(o,rot), b=Z(o,(rot+1)%6);
+    if(CW[a]!==b){ cwOK=false; cwWhy='order '+o+' rot '+rot+': '+a+'→'+b+', expected '+CW[a]; }
+  }
+  ok('every rotation moves each player exactly one zone clockwise', cwOK, cwWhy||'2→1→6→5→4→3→2');
+  const servers = [];
+  for(let rot=0;rot<6;rot++) servers.push([1,2,3,4,5,6].find(o=>Z(o,rot)===1));
+  ok('the server walks through all six in serving order',
+     servers.join(',')==='1,2,3,4,5,6', servers.join(','));
+
+  /* ---------------------------------------------------------------- */
+  grp('3. sideout scoring — you only rotate when you win a rally you were not serving');
+  const AP = CS.applyPoint;
+  const mk = (serving,rotation)=>({us:0,them:0,serving,rotation,points:[],stats:{}});
+  let st = mk('us',0);
+  for(let i=0;i<5;i++) st = Object.assign(st, AP(st,'us'));
+  ok('five straight points while serving does not rotate', st.rotation===0 && st.us===5, 'rot='+st.rotation);
+  st = mk('them',0); st = Object.assign(st, AP(st,'us'));
+  ok('winning a rally on their serve rotates us once and wins serve',
+     st.rotation===1 && st.serving==='us', 'rot='+st.rotation+' serving='+st.serving);
+  st = mk('us',3); st = Object.assign(st, AP(st,'them'));
+  ok('losing our serve does not rotate us', st.rotation===3 && st.serving==='them', 'rot='+st.rotation);
+  st = mk('them',2);
+  for(let i=0;i<7;i++) st = Object.assign(st, AP(st,'them'));
+  ok('an opponent run does not rotate us', st.rotation===2, 'rot='+st.rotation);
+  /* This one has to prove rotation MOVED, not just that it ended at zero.
+     Written as "ends at 0" it passed even with rotation completely disabled,
+     because 0 === 0 - caught by deliberately sabotaging applyPoint. */
+  st = mk('them',0);
+  const seen = [st.rotation];
+  for(let i=0;i<6;i++){
+    st = Object.assign(st, AP(st,'us'));
+    seen.push(st.rotation);
+    st = Object.assign(st, AP(st,'them'));
+  }
+  ok('each sideout advances the rotation by exactly one',
+     seen.join(',')==='0,1,2,3,4,5,0', seen.join(','));
+  ok('six sideouts return to rotation 1', st.rotation===0, 'rot='+st.rotation);
+  ok('the rotation actually moved (not stuck on one value)',
+     new Set(seen).size===6, new Set(seen).size+' distinct rotations seen');
+
+  /* ---------------------------------------------------------------- */
+  grp('4. undo last point — the other flagged risk');
+  seedRoster(CS);
+  CS.go('track'); await sleep(200);
+  const set0 = CS.curSet();
+  set0.serving = 'them'; CS.commit();
+  const before = { us:set0.us, them:set0.them, serving:set0.serving, rotation:set0.rotation };
+  CS.scorePoint('us');                       /* sideout: score, serve AND rotation all move */
+  const mid = CS.curSet();
+  ok('the sideout changed score, serve and rotation together',
+     mid.us===before.us+1 && mid.serving==='us' && mid.rotation===(before.rotation+1)%6,
+     'us='+mid.us+' serving='+mid.serving+' rot='+mid.rotation);
+  CS.undoPoint();
+  const after = CS.curSet();
+  ok('undo restores the score', after.us===before.us && after.them===before.them);
+  ok('undo restores who was serving', after.serving===before.serving, after.serving);
+  ok('undo restores the rotation', after.rotation===before.rotation, 'rot='+after.rotation);
+  ok('undo removes the point from history', (after.points||[]).length===0);
+
+  /* a longer random sequence must unwind perfectly, one point at a time */
+  let seed=5; const rnd=()=>(seed=(seed*1103515245+12345)%2147483648)/2147483648;
+  const s2 = CS.curSet(); s2.serving='us'; CS.commit();
+  const snaps = [];
+  for(let i=0;i<30;i++){
+    snaps.push({us:s2.us,them:s2.them,serving:s2.serving,rotation:s2.rotation});
+    CS.scorePoint(rnd()<0.5?'us':'them');
+  }
+  let unwindOK = true, unwindWhy='';
+  for(let i=29;i>=0;i--){
+    CS.undoPoint();
+    const c = CS.curSet(), e = snaps[i];
+    if(c.us!==e.us||c.them!==e.them||c.serving!==e.serving||c.rotation!==e.rotation){
+      unwindOK=false; unwindWhy='step '+i+': got '+c.us+'-'+c.them+'/'+c.serving+'/'+c.rotation+
+        ' expected '+e.us+'-'+e.them+'/'+e.serving+'/'+e.rotation; break;
+    }
+  }
+  ok('30 random points unwind exactly, one undo at a time', unwindOK, unwindWhy||'every step matched');
+
+  /* ---------------------------------------------------------------- */
+  grp('5. stat logging and undo');
+  seedRoster(CS); CS.go('track'); await sleep(150);
+  CS.logStat('p0','Kill',{kills:1,atkAtt:1},'Attack');
+  CS.logStat('p0','Kill',{kills:1,atkAtt:1},'Attack');
+  CS.logStat('p0','Error',{atkErr:1,atkAtt:1},'Attack');
+  const s5 = CS.curSet().stats['p0'];
+  ok('kills and attempts accumulate', s5.kills===2 && s5.atkAtt===3, 'K'+s5.kills+' att'+s5.atkAtt);
+  ok('hitting percentage is (kills − errors) ÷ attempts',
+     Math.abs(CS.hitPct(s5) - (2-1)/3) < 1e-9, CS.fmt3(CS.hitPct(s5)));
+  CS.logStat('p1','3',{passSum:3,passCount:1},'Serve-receive pass');
+  CS.logStat('p1','2',{passSum:2,passCount:1},'Serve-receive pass');
+  ok('pass average is the mean rating', Math.abs(CS.passAvg(CS.curSet().stats['p1']) - 2.5) < 1e-9,
+     CS.fmt2(CS.passAvg(CS.curSet().stats['p1'])));
+  CS.undoStat();
+  ok('undo removes exactly the last stat',
+     CS.curSet().stats['p1'].passCount===1 && CS.curSet().stats['p1'].passSum===3);
+  ok('undo never drives a counter negative', (()=>{ for(let i=0;i<20;i++) CS.undoStat();
+     const a=CS.curSet().stats['p0']||{}; return (a.kills||0)>=0 && (a.atkAtt||0)>=0; })());
+
+  /* match totals must add the sets, not just show one */
+  seedRoster(CS);
+  CS.S.sets = [CS.emptySet(), CS.emptySet()];
+  CS.S.sets[0].stats['p0'] = Object.assign(CS.emptyStat(), {kills:4, atkAtt:6});
+  CS.S.sets[1].stats['p0'] = Object.assign(CS.emptyStat(), {kills:3, atkAtt:5});
+  CS.commit();
+  const tot = CS.sumStats(CS.S.sets,'p0');
+  ok('match total sums every set', tot.kills===7 && tot.atkAtt===11, 'K'+tot.kills+' att'+tot.atkAtt);
+
+  /* ---------------------------------------------------------------- */
+  grp('6. saved lineups — apply and save over');
+  seedRoster(CS);
+  CS.S.matchPos = { p0:'S' };
+  CS.S.savedLineups = [{id:'A',name:'A',system:'5-1',order:['p0','p1','p2','p3','p4','p5'],matchPos:{p0:'S'}},
+                       {id:'B',name:'B',system:'6-2',order:['p5','p4','p3','p2','p1','p0'],matchPos:{p5:'S'}}];
+  CS.commit();
+  CS.applyLineup('B');
+  ok('applying a lineup swaps the serving order', CS.S.lineup.order[0]==='p5', CS.S.lineup.order.join(','));
+  ok('applying a lineup swaps the system', CS.S.lineup.system==='6-2', CS.S.lineup.system);
+  ok('applying a lineup swaps positions-this-match', CS.S.matchPos.p5==='S' && !CS.S.matchPos.p0);
+  ok('the applied lineup is marked in use', CS.S.activeLineupId==='B');
+  CS.applyLineup('A');
+  ok('switching back restores the first lineup', CS.S.lineup.order[0]==='p0' && CS.S.lineup.system==='5-1');
+  ok('applying an unknown id changes nothing', (()=>{ const b=JSON.stringify(CS.S.lineup);
+      CS.applyLineup('nope'); return JSON.stringify(CS.S.lineup)===b; })());
+  /* save-over must capture the CURRENT lineup into the named slot */
+  CS.S.lineup.order[0]='p7'; CS.commit();
+  const slot = CS.S.savedLineups.find(x=>x.id==='A');
+  slot.order = CS.S.lineup.order.slice(); slot.system = CS.S.lineup.system;
+  slot.matchPos = Object.assign({}, CS.S.matchPos); CS.commit();
+  CS.applyLineup('B'); CS.applyLineup('A');
+  ok('save over then reload the preset returns the edited six',
+     CS.S.lineup.order[0]==='p7', CS.S.lineup.order.join(','));
+  ok('a saved preset is an independent copy, not a live reference',
+     (()=>{ CS.S.lineup.order[1]='p9';
+       return CS.S.savedLineups.find(x=>x.id==='A').order[1]!=='p9'; })());
+
+  /* ---------------------------------------------------------------- */
+  grp('7. subs keep the court truthful');
+  seedRoster(CS);
+  CS.go('subs'); await sleep(200);
+  const D0 = F().contentDocument;
+  const onCourtBefore = CS.S.lineup.order.slice();
+  /* tap who comes out, then who comes in - the real two-step flow */
+  const outChip = [...D0.querySelectorAll('.pchip')].find(b=>/P2/.test(b.textContent));
+  ok('an on-court player can be tapped to come out', !!outChip);
+  outChip.click(); await sleep(200);
+  const inChip = [...F().contentDocument.querySelectorAll('.pchip.in')][0];
+  ok('the bench becomes tappable once someone is coming out', !!inChip);
+  inChip.click(); await sleep(250);
+  ok('the substitute replaces the exact player who left',
+     CS.S.lineup.order.indexOf('p2')<0 && CS.S.lineup.order.length===6,
+     CS.S.lineup.order.join(','));
+  ok('the sub is recorded against the current set',
+     CS.S.subLog.length===1 && CS.S.subLog[0].outId==='p2' && CS.S.subLog[0].setIdx===CS.S.curSet);
+  ok('serving order slots are preserved, not reshuffled',
+     CS.S.lineup.order.filter(Boolean).length===6);
+  /* the court must now show the substitute standing in the same spot */
+  const slotIdx = onCourtBefore.indexOf('p2');
+  ok('the substitute inherits the leaver serving slot',
+     CS.S.lineup.order[slotIdx] === CS.S.subLog[0].inId, 'slot '+slotIdx);
+
+  /* ---------------------------------------------------------------- */
+  grp('8. no sideways scrolling on a phone');
+  for(const w of [320,360,390,430]){
+    F().style.width = w+'px';
+    await sleep(300);
+    const doc = F().contentDocument.documentElement;
+    const mainEl = F().contentDocument.querySelector('main');
+    const vw = F().contentWindow.innerWidth;
+    ok('no horizontal scroll at '+w+'px', doc.scrollWidth <= vw+1,
+       'scrollW '+doc.scrollWidth+' vs '+vw);
+    ok('content fits the scroller at '+w+'px',
+       !mainEl || mainEl.scrollWidth <= mainEl.clientWidth+1,
+       mainEl ? mainEl.scrollWidth+' vs '+mainEl.clientWidth : 'no main');
+  }
+  F().style.width='390px'; await sleep(250);
+
+  /* ---------------------------------------------------------------- */
+  grp('9. phone ergonomics: locked nav, tap targets, no stray zoom');
+  {
+    const D=F().contentDocument, W=F().contentWindow;
+    CS.go('track'); await sleep(250);
+    const nav=D.querySelector('nav.tabs'), mainEl=D.querySelector('main');
+    ok('nav is a layout row, not a floating fixed bar',
+       W.getComputedStyle(nav).position==='static', W.getComputedStyle(nav).position);
+    const nr=nav.getBoundingClientRect();
+    ok('whole nav is inside the viewport', nr.bottom<=W.innerHeight+1 && nr.top>=0,
+       nr.top.toFixed(0)+'-'+nr.bottom.toFixed(0)+' vs '+W.innerHeight);
+    ok('nav sits flush against the bottom edge', Math.abs(nr.bottom-W.innerHeight)<2,
+       (W.innerHeight-nr.bottom).toFixed(1)+'px gap');
+    mainEl.scrollTop = 500; await sleep(220);
+    ok('the list really scrolled (so the next check means something)', mainEl.scrollTop>50,
+       'scrollTop='+mainEl.scrollTop);
+    ok('nav does not move when the page scrolls',
+       Math.abs(nav.getBoundingClientRect().top-nr.top)<0.5);
+    mainEl.scrollTop = 0; await sleep(150);
+
+    const pt = D.querySelector('.ptbtn');
+    const r = pt.getBoundingClientRect();
+    ok('point button >= 44px tall', r.height>=44, r.height.toFixed(0)+'px');
+    ok('point button opts out of double-tap zoom',
+       W.getComputedStyle(pt).touchAction==='manipulation', W.getComputedStyle(pt).touchAction);
+
+    let small=[], n=0;
+    for(const v of ['track','stats','lineup','subs','scout','roster']){
+      CS.go(v); await sleep(220);
+      for(const el of D.querySelectorAll('input,textarea,select')){
+        if(!el.offsetParent) continue;
+        n++;
+        const px=parseFloat(W.getComputedStyle(el).fontSize);
+        if(px<16) small.push((el.className||el.tagName).trim()+' @'+px);
+      }
+    }
+    ok('no focusable field under 16px (iOS focus-zoom threshold)', small.length===0,
+       small.length ? [...new Set(small)].join(', ') : n+' fields swept across 6 views');
+    const vp = (D.querySelector('meta[name=viewport]')||{}).content||'';
+    ok('viewport still allows pinch-zoom', !/maximum-scale|user-scalable\s*=\s*no/.test(vp), vp);
+  }
+
+  /* ---------------------------------------------------------------- */
+  grp('10. the stats table always shows WHO the numbers belong to');
+  /* This failed for real: seven columns filled the row, the name column
+     collapsed to zero width, and the table rendered perfectly correct
+     figures next to nobody. Nothing threw and nothing looked broken. */
+  {
+    const D=F().contentDocument, W=F().contentWindow;
+    seedRoster(CS);
+    CS.S.sets[0].stats['p0'] = Object.assign(CS.emptyStat(),
+      {kills:9, atkErr:3, atkAtt:20, aces:4, srvErr:2, srvAtt:19, passSum:31, passCount:14, digs:7, blocks:2});
+    CS.commit();
+    for(const w of [320,390]){
+      F().style.width = w+'px';
+      CS.go('stats'); await sleep(320);
+      const names = [...D.querySelectorAll('.trow .tname')];
+      ok('player names render at '+w+'px', names.length>0, names.length+' rows');
+      const widths = names.map(n=>n.getBoundingClientRect().width);
+      ok('no name column collapsed at '+w+'px', widths.every(x=>x>=40),
+         'narrowest ' + Math.min.apply(null, widths).toFixed(1) + 'px');
+      ok('the first row names a real player at '+w+'px',
+         /P0/.test(names[0].textContent), names[0].textContent);
+      /* a table cell must not pick up styling from a same-named button class:
+         .tcell.key also matched .key (the stat button) and every highlighted
+         figure rendered as a bordered 56px-tall button inside the table */
+      const rowH = D.querySelector('.trow').getBoundingClientRect().height;
+      ok('table rows are table-height, not button-height, at '+w+'px', rowH < 48,
+         rowH.toFixed(0)+'px');
+      const cellBorder = W.getComputedStyle(D.querySelector('.trow .tcell')).borderTopWidth;
+      ok('table cells have no button border at '+w+'px',
+         cellBorder === '0px' || cellBorder === '', cellBorder);
+      const doc = D.documentElement;
+      ok('the page still does not scroll sideways at '+w+'px',
+         doc.scrollWidth <= F().contentWindow.innerWidth+1,
+         doc.scrollWidth+' vs '+F().contentWindow.innerWidth);
+    }
+    F().style.width='390px'; await sleep(250);
+  }
+
+  grp('11. every screen renders without throwing');
+  for(const v of ['track','stats','lineup','subs','scout','roster']){
+    let threw = null;
+    try { CS.go(v); await sleep(220); } catch(e){ threw = e.message; }
+    const kids = F().contentDocument.querySelectorAll('main *').length;
+    ok(v+' renders', !threw && kids>5, threw || kids+' nodes');
+  }
+
+  /* ---------------------------------------------------------------- */
+  grp('12. persistence across a full reload');
+  seedRoster(CS);
+  CS.S.team = 'TestTeam';
+  CS.go('track'); await sleep(150);
+  CS.curSet().serving='us'; CS.commit();
+  for(let i=0;i<14;i++) CS.scorePoint(i%3===0?'them':'us');
+  CS.logStat('p0','Kill',{kills:1,atkAtt:1},'Attack');
+  CS.logStat('p1','Ace',{aces:1,srvAtt:1},'Serve');
+  CS.commit();
+  await sleep(800);
+  const exp = {
+    us: CS.curSet().us, them: CS.curSet().them,
+    serving: CS.curSet().serving, rotation: CS.curSet().rotation,
+    logs: CS.S.log.length, roster: CS.S.roster.length, team: CS.S.team, rev: CS.S.rev
+  };
+  CS = await reloadApp();
+  const got = {
+    us: CS.curSet().us, them: CS.curSet().them,
+    serving: CS.curSet().serving, rotation: CS.curSet().rotation,
+    logs: CS.S.log.length, roster: CS.S.roster.length, team: CS.S.team, rev: CS.S.rev
+  };
+  ok('score survived', got.us===exp.us && got.them===exp.them, got.us+'-'+got.them);
+  ok('serve and rotation survived', got.serving===exp.serving && got.rotation===exp.rotation,
+     got.serving+' / rot '+got.rotation);
+  ok('event log survived', got.logs===exp.logs, got.logs+' vs '+exp.logs);
+  ok('roster and team name survived', got.roster===exp.roster && got.team===exp.team);
+  ok('revision counter survived', got.rev===exp.rev, got.rev+' vs '+exp.rev);
+
+  /* ---------------------------------------------------------------- */
+  grp('13. survives losing localStorage (IndexedDB rescue)');
+  F().contentWindow.localStorage.removeItem(LS_KEY);
+  ok('localStorage wiped', !F().contentWindow.localStorage.getItem(LS_KEY));
+  CS = await reloadApp();
+  ok('IndexedDB restored the match', CS.curSet().us===exp.us && CS.curSet().them===exp.them,
+     CS.curSet().us+'-'+CS.curSet().them);
+  ok('rotation restored too', CS.curSet().rotation===exp.rotation);
+
+  /* ---------------------------------------------------------------- */
+  grp('14. backup round trip — the flagged export/import risk');
+  const blob = JSON.stringify(CS.S);
+  const parsed = JSON.parse(blob);
+  ok('backup is valid JSON with a roster', Array.isArray(parsed.roster) && parsed.roster.length>0);
+  ok('backup carries the match', parsed.sets && parsed.sets[0].us===exp.us);
+  ok('backup carries lineups and scouting keys',
+     'savedLineups' in parsed && 'opponents' in parsed && 'matchPos' in parsed);
+  /* wipe, then restore from the blob exactly as the Restore button does */
+  CS.S.roster = []; CS.S.sets = [CS.emptySet()]; CS.S.team=''; CS.commit();
+  ok('state cleared before restore', CS.S.roster.length===0 && CS.curSet().us===0);
+  const d = JSON.parse(blob);
+  CS.S.team = d.team; CS.S.roster = d.roster; CS.S.sets = d.sets;
+  CS.S.curSet = d.curSet; CS.S.log = d.log; CS.S.lineup = d.lineup;
+  CS.S.subLog = d.subLog; CS.S.opponents = d.opponents; CS.S.matchPos = d.matchPos;
+  CS.S.savedLineups = d.savedLineups; CS.commit();
+  ok('restore brings the roster back', CS.S.roster.length===exp.roster);
+  ok('restore brings the score back', CS.curSet().us===exp.us && CS.curSet().them===exp.them);
+  ok('restore brings serve and rotation back',
+     CS.curSet().serving===exp.serving && CS.curSet().rotation===exp.rotation);
+  ok('restore brings the team name back', CS.S.team===exp.team, CS.S.team);
+
+  /* ---------------------------------------------------------------- */
+  grp('15. cleanup — put your own data back');
+  /* Restoring localStorage alone is NOT enough: the app keeps an IndexedDB
+     mirror and takes whichever has the higher revision on boot, so a raw
+     write loses to the test data still sitting in IDB. The restore has to go
+     through commit(), which bumps the revision past it and writes both. */
+  const prior = BACKUP ? JSON.parse(BACKUP) : null;
+  CS = await reloadApp();
+  if (prior) {
+    for (const k of ['team','roster','sets','curSet','log','lineup','subLimit',
+                     'subLog','opponents','matchPos','savedLineups','activeLineupId','lastMatch'])
+      if (k in prior) CS.S[k] = prior[k];
+  } else {
+    CS.S.roster = CS.freshRoster(); CS.S.sets=[CS.emptySet()]; CS.S.curSet=0;
+    CS.S.log=[]; CS.S.subLog=[]; CS.S.team=''; CS.S.opponents=[]; CS.S.savedLineups=[];
+    CS.S.lineup={system:'5-1',order:[null,null,null,null,null,null]};
+  }
+  CS.commit();
+  await sleep(800);
+  CS = await reloadApp();
+  ok('your own data is back', prior ? CS.S.roster.length === (prior.roster||[]).length : true,
+     CS.S.roster.length+' players');
+  ok('no test players left behind', !CS.S.roster.some(p=>/^P\d+$/.test(p.name||'')),
+     CS.S.roster.slice(0,3).map(p=>p.name).join(', '));
+  ok('no test team name left behind', CS.S.team !== 'TestTeam', CS.S.team || '(blank)');
+
+  sum.textContent = (fail===0 ? '✅ ALL ' : '❌ ') + pass + ' passed, ' + fail + ' failed';
+  sum.style.color = fail===0 ? '#3DDC97' : '#EA4C60';
+  window.__RESULT = {pass, fail};
+})().catch(e=>{
+  sum.textContent = '❌ suite crashed: ' + e.message;
+  sum.style.color = '#EA4C60';
+  window.__RESULT = {pass, fail, crash: e.message};
+});
+</script>
+</body>
+</html>
