@@ -1343,7 +1343,9 @@ function viewLineup() {
   wrap.appendChild(h("h2", { class: "sec" }, "Saved lineups · season"));
   wrap.appendChild(saved);
 
-  const nameInp = h("input", { class: "inp", placeholder: "Name this lineup (e.g. 5-1, Lucy sets)" });
+  /* Neutral example. A placeholder is still published text - naming a real
+     player here would leak exactly what the generic roster exists to avoid. */
+  const nameInp = h("input", { class: "inp", placeholder: "Name this lineup (e.g. 5-1, setter front)" });
   wrap.appendChild(h("div", { class: "row" },
     nameInp,
     h("button", { class: "btn solid", onclick: () => {
@@ -1607,7 +1609,7 @@ function viewRoster() {
   wrap.appendChild(h("div", { class: "panel" },
     h("h2", { class: "sec" }, "Team name"),
     h("input", {
-      class: "inp", placeholder: "e.g. Sanford", value: S.team,
+      class: "inp", placeholder: "Your team name", value: S.team,
       onchange: (e) => { S.team = e.target.value.trim(); commit(); render(); }
     })));
 

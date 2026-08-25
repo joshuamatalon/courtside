@@ -243,7 +243,7 @@ No npm, no framework, no build. Edit `index.html` in any text editor and reload.
 ## Known limits
 
 - **No season history.** "New match" clears the match (undoable once). There are no
-  per-match archives or season-long totals. Matthew was asked and has not answered.
+  per-match archives or season-long totals. The coach was asked and has not answered.
 - **Each phone is its own island.** Nothing syncs between coaches. Two coaches logging
   produce two separate stat sheets; moving data means Save backup → send file → Restore.
 - **Substitution legality is not enforced** — only a raw count against a limit. No
