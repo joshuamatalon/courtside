@@ -290,7 +290,12 @@ function seedRoster(CS){
        Math.abs(nav.getBoundingClientRect().top-nr.top)<0.5);
     mainEl.scrollTop = 0; await sleep(150);
 
-    const pt = D.querySelector('.ptbtn');
+    /* The point buttons live in the pinned rally bar, which deliberately does
+       not exist until someone has chosen who serves first - there is nothing
+       sensible to score before that. Put the set in a real state first. */
+    CS.curSet().serving = 'us'; CS.commit(); CS.render(); await sleep(250);
+    const pt = D.querySelector('.rally .ptbtn');
+    ok('point buttons exist once a server is chosen', !!pt);
     const r = pt.getBoundingClientRect();
     ok('point button >= 44px tall', r.height>=44, r.height.toFixed(0)+'px');
     ok('point button opts out of double-tap zoom',
@@ -350,7 +355,96 @@ function seedRoster(CS){
     F().style.width='390px'; await sleep(250);
   }
 
-  grp('11. every screen renders without throwing');
+  grp('11. the live scoring loop — can a coach actually use this mid-rally?');
+  /* The app can be entirely correct and still fail the job it exists for.
+     render() rebuilds main, which threw the scroll position away: measured
+     scrollTop 900 -> 0 on EVERY tap, on a screen 2.77 viewports tall. The
+     coach scrolled down, logged one kill, and got fired back to the top. */
+  {
+    const D=F().contentDocument, W=F().contentWindow;
+    seedRoster(CS);
+    CS.S.roster = Array.from({length:15},(_,i)=>({id:'q'+i,name:'N'+i,number:String(i+1),positions:['OH']}));
+    CS.S.lineup = { system:'5-1', order:['q0','q1','q2','q3','q4','q5'] };
+    CS.curSet().serving='us'; CS.V.selected='q0'; CS.commit();
+    /* the previous group left the app on Stats - go to Track explicitly,
+       otherwise render() rebuilds the wrong screen and none of the live
+       controls this group is about even exist */
+    CS.go('track');
+    await sleep(300);
+    const main = () => D.querySelector('main');
+
+    ok('the rally bar is pinned on Track', !!D.querySelector('.rally'));
+    const pts = [...D.querySelectorAll('.rally .ptbtn')];
+    ok('both point buttons live in it', pts.length===2);
+    /* Guard every lookup below. A null here throws and kills every remaining
+       group - one structural change already cost six groups that way. */
+    const statKey = D.querySelector('.key');
+    ok('stat keys are present for the selected player', !!statKey);
+    if (!pts.length || !statKey) {
+      ok('SKIPPED the rest of the loop checks — structure missing', false,
+         'pts=' + pts.length + ' key=' + !!statKey);
+    } else {
+
+    const reach = (el)=>{ const r=el.getBoundingClientRect(); return r.top>=0 && r.bottom<=W.innerHeight+1; };
+    ok('point buttons need no scrolling', pts.every(reach),
+       pts.map(b=>b.getBoundingClientRect().top.toFixed(0)).join(','));
+
+    /* park where the work happens, then tap repeatedly and watch for drift */
+    const maxScroll = main().scrollHeight - main().clientHeight;
+    const park = Math.min(430, maxScroll);
+    main().scrollTop = park; await sleep(200);
+    const s0 = main().scrollTop;
+    let drift = 0;
+    for(let i=0;i<8;i++){
+      D.querySelector('.key').click(); await sleep(100);
+      drift = Math.max(drift, Math.abs(main().scrollTop - s0));
+    }
+    ok('scroll holds across 8 stat taps', drift<=2, 'worst drift '+drift+'px from '+s0);
+    for(let i=0;i<5;i++){
+      D.querySelector('.rally .ptbtn').click(); await sleep(100);
+      drift = Math.max(drift, Math.abs(main().scrollTop - s0));
+    }
+    ok('scroll holds across 5 point taps', drift<=2, 'worst drift '+drift+'px');
+    ok('point buttons are still reachable while parked on the stats',
+       [...D.querySelectorAll('.rally .ptbtn')].every(reach));
+
+    /* the restore must happen AFTER the pinned bar exists, or the browser
+       clamps it to the taller layout's smaller maximum and it still jumps */
+    ok('the parked position was not silently clamped', main().scrollTop===s0,
+       main().scrollTop+' vs '+s0);
+
+    /* Measured in pixels, not "screens". The ratio depends on the test frame's
+       height, so a fixed ratio threshold fails for reasons that have nothing to
+       do with the app. Before the pass, Track was 2350px with a 15-player
+       roster; the duplicated positions panel and point row accounted for ~700
+       of that. */
+    const mh = main().scrollHeight, vh = main().clientHeight;
+    ok('Track is materially shorter than the 2350px it was', mh < 1900,
+       mh+'px (was 2350px) — '+(mh/vh).toFixed(2)+' screens at this frame height');
+
+    /* switching screens should land at the top like any new page */
+    main().scrollTop = 300; await sleep(150);
+    CS.go('stats'); await sleep(250);
+    ok('changing tab lands at the top', main().scrollTop===0, 'scrollTop='+main().scrollTop);
+    CS.go('roster'); await sleep(250);
+    ok('the rally bar does not follow you off Track',
+       !W.document.body.classList.contains('quickon'));
+    CS.go('track'); await sleep(250);
+    ok('the rally bar comes back on Track', !!D.querySelector('.rally'));
+
+    /* "Positions this match" belongs on Lineup, not duplicated onto the live
+       screen where a 15-row panel just pushes the working area further away */
+    CS.go('track'); await sleep(220);
+    const trackSelects = D.querySelectorAll('.mprow').length;
+    CS.go('lineup'); await sleep(220);
+    const lineupSelects = D.querySelectorAll('.mprow').length;
+    ok('positions panel is on Lineup only, not duplicated onto Track',
+       trackSelects===0 && lineupSelects>0, 'track '+trackSelects+' / lineup '+lineupSelects);
+    CS.go('track'); await sleep(200);
+    }
+  }
+
+  grp('12. every screen renders without throwing');
   for(const v of ['track','stats','lineup','subs','scout','roster']){
     let threw = null;
     try { CS.go(v); await sleep(220); } catch(e){ threw = e.message; }
@@ -359,7 +453,7 @@ function seedRoster(CS){
   }
 
   /* ---------------------------------------------------------------- */
-  grp('12. persistence across a full reload');
+  grp('13. persistence across a full reload');
   seedRoster(CS);
   CS.S.team = 'TestTeam';
   CS.go('track'); await sleep(150);
@@ -388,7 +482,7 @@ function seedRoster(CS){
   ok('revision counter survived', got.rev===exp.rev, got.rev+' vs '+exp.rev);
 
   /* ---------------------------------------------------------------- */
-  grp('13. survives losing localStorage (IndexedDB rescue)');
+  grp('14. survives losing localStorage (IndexedDB rescue)');
   F().contentWindow.localStorage.removeItem(LS_KEY);
   ok('localStorage wiped', !F().contentWindow.localStorage.getItem(LS_KEY));
   CS = await reloadApp();
@@ -397,7 +491,7 @@ function seedRoster(CS){
   ok('rotation restored too', CS.curSet().rotation===exp.rotation);
 
   /* ---------------------------------------------------------------- */
-  grp('14. backup round trip — the flagged export/import risk');
+  grp('15. backup round trip — the flagged export/import risk');
   const blob = JSON.stringify(CS.S);
   const parsed = JSON.parse(blob);
   ok('backup is valid JSON with a roster', Array.isArray(parsed.roster) && parsed.roster.length>0);
@@ -419,7 +513,7 @@ function seedRoster(CS){
   ok('restore brings the team name back', CS.S.team===exp.team, CS.S.team);
 
   /* ---------------------------------------------------------------- */
-  grp('15. cleanup — put your own data back');
+  grp('16. cleanup — put your own data back');
   /* Restoring localStorage alone is NOT enough: the app keeps an IndexedDB
      mirror and takes whichever has the higher revision on boot, so a raw
      write loses to the test data still sitting in IDB. The restore has to go

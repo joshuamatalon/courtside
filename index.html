@@ -362,6 +362,24 @@ nav.tabs button svg{width:20px;height:20px;stroke-width:1.7;display:block}
 nav.tabs button.on{color:var(--accent)}
 nav.tabs button.on svg{stroke-width:2.1}
 
+/* ------------------------------------------------------ rally  bar --- */
+/* A real layout row between the scroller and the nav, never position:fixed -
+   fixed bottom bars anchor to the layout viewport, which on iOS runs behind
+   Safari's toolbar. */
+.rally{flex:none;background:rgba(19,22,29,.97);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  border-top:1px solid var(--line-2);box-shadow:var(--float);
+  padding:9px var(--s3) 11px}
+#quickslot{flex:none;display:none}
+body.quickon #quickslot{display:block}
+.rallyline{display:flex;align-items:baseline;gap:var(--s3)}
+.rallyline b{font-size:19px;font-weight:700;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums}
+.rallyline b span{color:var(--dim);font-weight:600}
+.rallyline em{font-style:normal;font-size:10px;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim)}
+.rally .ptbtn{min-height:58px}
+
 /* --------------------------------------------------------- chips --- */
 .chip{font-size:11.5px;font-weight:600;padding:6px 11px;border-radius:var(--r-full);
   background:var(--surface-2);border:1px solid var(--line);color:var(--text-2);
@@ -745,7 +763,16 @@ function paintBadge() {
 /* -------------------------------------------------------------- shell -- */
 function render() {
   const root = $("#root");
+  /* render() tears down and rebuilds main, which throws the scroll position
+     away. On a screen nearly three viewports tall that means every single tap
+     - a kill, a point, picking a player - fires the coach back to the top and
+     they have to scroll down again before the next rally. Measured: scrollTop
+     900 -> 0 on every tap. Carry it across the rebuild. */
+  const prevMain = root.querySelector("main");
+  const prevScroll = prevMain ? prevMain.scrollTop : 0;
+  const prevTab = root.__tab;
   root.textContent = "";
+  root.__tab = V.tab;
   quickSlot = h("div", { id: "quickslot" });
 
   const header = h("header", null,
@@ -770,9 +797,57 @@ function render() {
   root.appendChild(main);
   root.appendChild(quickSlot);
   root.appendChild(nav);
+
+  /* The rally bar has to be built BEFORE the scroll is restored. While
+     #quickslot is still empty, main is 120px taller and its maximum scroll is
+     correspondingly smaller, so an attempted restore gets silently clamped to
+     that smaller maximum and the page still jumps. Measured: asking for 576
+     landed on 494 until this ran in the right order. */
+  if (V.tab === "track") rallyBar();
+  else setQuick(false);   /* nothing else clears it, so the class went stale */
+
+  /* Restore only within a tab. Changing tabs should land at the top, the way
+     opening a new screen always does. */
+  if (prevTab === V.tab && prevScroll > 0) main.scrollTop = prevScroll;
   paintBadge();
   storageWarning();
 }
+
+/* The two controls used on EVERY rally live here, pinned, so scoring never
+   depends on where the page happens to be scrolled. Everything else on Track
+   is reference material and can scroll freely underneath. */
+function rallyBar() {
+  if (!quickSlot) return;
+  const set = curSet();
+  const noPoints = (set.points || []).length === 0;
+  if (noPoints && set.serving == null) { setQuick(false); return; }
+
+  const usSub = set.serving === "us" ? "hold serve"
+    : set.serving === "them" ? "sideout · rotate" : "we serve next";
+  const themSub = set.serving === "them" ? "they hold"
+    : set.serving === "us" ? "we lose serve" : "they serve next";
+
+  quickSlot.textContent = "";
+  quickSlot.appendChild(h("div", { class: "rally" },
+    h("div", { class: "rallyline" },
+      h("b", null, set.us, h("span", null, " – "), set.them),
+      h("em", null, "Rot " + ((set.rotation || 0) + 1) + "/6"),
+      h("div", { class: "grow" }),
+      h("button", {
+        class: "chip", disabled: noPoints,
+        style: noPoints ? { opacity: ".4" } : {},
+        onclick: () => { undoPoint(); }
+      }, "↺ Undo point")),
+    h("div", { class: "pointrow", style: { marginTop: "8px" } },
+      h("button", { class: "ptbtn us", "aria-label": "point for us",
+        onclick: () => { scorePoint("us"); } },
+        h("span", null, "Point US"), h("small", null, usSub)),
+      h("button", { class: "ptbtn them", "aria-label": "point for them",
+        onclick: () => { scorePoint("them"); } },
+        h("span", null, "Point THEM"), h("small", null, themSub)))));
+  setQuick(true);
+}
+function setQuick(on) { document.body.classList.toggle("quickon", !!on); }
 
 function storageWarning() {
   const hl = Store.health;
@@ -926,26 +1001,9 @@ function viewTrack() {
       h("em", null, set.serving === "us" ? "we serve" : set.serving === "them" ? "they serve" : "—")));
   }
 
-  /* Each button says what the tap will DO to the serve, so the coach can see a
-     rotation coming before it happens instead of reading it off afterwards. */
-  const usSub = set.serving === "us" ? "hold serve"
-    : set.serving === "them" ? "sideout · rotate" : "we serve next";
-  const themSub = set.serving === "them" ? "they hold"
-    : set.serving === "us" ? "we lose serve" : "they serve next";
-  board.appendChild(h("div", { class: "pointrow" },
-    h("button", {
-      class: "ptbtn us", "aria-label": "point for us",
-      onclick: () => { scorePoint("us"); }
-    }, h("span", null, "Point US"), h("small", null, usSub)),
-    h("button", {
-      class: "ptbtn them", "aria-label": "point for them",
-      onclick: () => { scorePoint("them"); }
-    }, h("span", null, "Point THEM"), h("small", null, themSub))));
-
-  board.appendChild(h("button", {
-    class: "btn wide", style: { marginTop: "8px" }, disabled: noPoints,
-    onclick: () => { undoPoint(); }
-  }, "↺ Undo last point"));
+  /* Point buttons and undo now live in the pinned rally bar below, so they
+     are reachable no matter where the page is scrolled. Duplicating them here
+     would just make the screen taller for no gain. */
   wrap.appendChild(board);
 
   /* ---- court ---- */
@@ -1075,8 +1133,9 @@ function viewTrack() {
   else setLog.slice(0, 8).forEach((e) => lw.appendChild(h("div", { class: "logrow" }, e.label)));
   wrap.appendChild(lw);
 
-  wrap.appendChild(h("h2", { class: "sec", style: { marginTop: "8px" } }, "Positions this match"));
-  wrap.appendChild(matchPosPanel(S.lineup.order));
+  /* "Positions this match" is not duplicated here - it lives on the Lineup
+     tab. A 15-row panel of dropdowns is reference material, and putting it at
+     the bottom of the live screen only pushed the working area further away. */
   return wrap;
 }
 

@@ -142,11 +142,11 @@ python -m http.server 8788 --bind 127.0.0.1
 # then open http://127.0.0.1:8788/tools/selftest.html
 ```
 
-**100 assertions** driving the real app in a frame: rotation geometry, sideout scoring,
+**114 assertions** driving the real app in a frame: rotation geometry, sideout scoring,
 undo-point unwinding, stat maths, saved-lineup apply/save-over, subs updating the live
 court, no sideways scroll at 320/360/390/430 px, a locked nav bar, tap targets, the
 iOS zoom rules, every screen rendering, persistence across a reload, IndexedDB rescue,
-and the backup round trip.
+the backup round trip, and the live scoring loop itself.
 
 It backs your data up before it runs and restores it afterwards **through the app's own
 save path** — restoring localStorage alone is not enough, because the IndexedDB mirror
@@ -159,7 +159,54 @@ asserts the sequence `0,1,2,3,4,5,0`.
 
 ---
 
-## Two bugs found by looking
+## The intent pass — does it actually work mid-rally?
+
+Everything above says the app is *correct*. That is not the same as saying a coach can
+use it, and it failed that test badly the first time.
+
+`render()` tears down and rebuilds the screen. It threw the scroll position away, so
+**every tap fired the coach back to the top of a page 2.77 viewports tall.** Measured:
+`scrollTop 900 → 0` on a stat, a point, and a player chip alike. The real loop was:
+scroll down, log one kill, get sent to the top, scroll down again. Correct code, right
+colours, unusable.
+
+Three fixes, all measured:
+
+- **The controls used every rally are pinned.** Point US / Point THEM, the running score,
+  the rotation, and Undo point live in a bar between the scroller and the nav — a real
+  layout row, never `position:fixed`, for the same iOS toolbar reason as the nav itself.
+- **Scroll survives a rebuild.** It is carried across and restored *after* the pinned bar
+  is built. Restoring before that silently clamps it: while the slot is empty `main` is
+  120px taller and its maximum scroll is smaller, so asking for 576 landed on 494.
+- **Track lost ~700px of duplication.** The point row is no longer drawn twice, and
+  "Positions this match" — a 15-row panel of dropdowns — lives on the Lineup tab only
+  instead of being repeated at the bottom of the live screen.
+
+Result: **0px of scroll drift across 13 consecutive taps**, and the point buttons are
+reachable without scrolling from any position.
+
+### What fits on screen at once
+
+Measured with a 15-player roster, parked at the best scroll position:
+
+| viewport | player chips | stat keys | point buttons |
+|---|---|---|---|
+| 844 (iPhone 14) | 15 / 15 | 12 / 12 | 2 / 2 |
+| 750 | 15 / 15 | 10 / 12 | 2 / 2 |
+| 667 (iPhone SE) | 15 / 15 | 10 / 12 | 2 / 2 |
+
+On a small phone the two that fall below the fold are **Dig and Block** — the least
+time-critical, and typically logged after the rally rather than during it. Kills,
+errors, aces and the pass ratings are always visible.
+
+### A full match, played
+
+Three sets to 25 with subs and a lineup change, 126 rallies: every rally scored exactly
+one point, rotations stayed legal in all three sets, match totals equalled the sum of
+the sets, and the whole thing came to **17 KB**. The 200-entry event log caps *undo
+depth*, never the stats themselves — those live separately and are never trimmed.
+
+## Three bugs found by looking
 
 Neither threw an error and neither looked broken in a quick glance.
 
@@ -167,6 +214,8 @@ Neither threw an error and neither looked broken in a quick glance.
 `.tname` had `min-width:0`, so it collapsed to **zero width** — perfectly correct figures
 next to nobody. Fixed with a real minimum width, fewer columns per table, and a scroll
 box; the suite now asserts no name column is ever narrower than 40px.
+
+**Every tap scrolled the page back to the top.** See the intent pass above.
 
 **Highlighted figures rendered as buttons.** The cell modifier was `.tcell.key`, and
 `.key` is also the stat-button class — so those cells picked up a border, a background
