@@ -64,8 +64,8 @@ async function waitApp(){
 function seedRoster(CS){
   CS.S.roster = Array.from({length:12},(_,i)=>({id:'p'+i,name:'P'+i,number:String(i+1),positions:[i===0?'S':'OH']}));
   CS.S.lineup = { system:'5-1', order:['p0','p1','p2','p3','p4','p5'] };
-  CS.S.sets = [CS.emptySet()];
-  CS.S.curSet = 0; CS.S.log = []; CS.S.subLog = [];
+  CS.S.matches = [CS.emptyMatch()];
+  CS.S.curMatch = 0;
   CS.commit();
 }
 
@@ -194,11 +194,11 @@ function seedRoster(CS){
 
   /* match totals must add the sets, not just show one */
   seedRoster(CS);
-  CS.S.sets = [CS.emptySet(), CS.emptySet()];
-  CS.S.sets[0].stats['p0'] = Object.assign(CS.emptyStat(), {kills:4, atkAtt:6});
-  CS.S.sets[1].stats['p0'] = Object.assign(CS.emptyStat(), {kills:3, atkAtt:5});
+  CS.M().sets = [CS.emptySet(), CS.emptySet()];
+  CS.M().sets[0].stats['p0'] = Object.assign(CS.emptyStat(), {kills:4, atkAtt:6});
+  CS.M().sets[1].stats['p0'] = Object.assign(CS.emptyStat(), {kills:3, atkAtt:5});
   CS.commit();
-  const tot = CS.sumStats(CS.S.sets,'p0');
+  const tot = CS.sumStats(CS.M().sets,'p0');
   ok('match total sums every set', tot.kills===7 && tot.atkAtt===11, 'K'+tot.kills+' att'+tot.atkAtt);
 
   /* ---------------------------------------------------------------- */
@@ -246,13 +246,13 @@ function seedRoster(CS){
      CS.S.lineup.order.indexOf('p2')<0 && CS.S.lineup.order.length===6,
      CS.S.lineup.order.join(','));
   ok('the sub is recorded against the current set',
-     CS.S.subLog.length===1 && CS.S.subLog[0].outId==='p2' && CS.S.subLog[0].setIdx===CS.S.curSet);
+     CS.M().subLog.length===1 && CS.M().subLog[0].outId==='p2' && CS.M().subLog[0].setIdx===CS.M().curSet);
   ok('serving order slots are preserved, not reshuffled',
      CS.S.lineup.order.filter(Boolean).length===6);
   /* the court must now show the substitute standing in the same spot */
   const slotIdx = onCourtBefore.indexOf('p2');
   ok('the substitute inherits the leaver serving slot',
-     CS.S.lineup.order[slotIdx] === CS.S.subLog[0].inId, 'slot '+slotIdx);
+     CS.S.lineup.order[slotIdx] === CS.M().subLog[0].inId, 'slot '+slotIdx);
 
   /* ---------------------------------------------------------------- */
   grp('8. no sideways scrolling on a phone');
@@ -325,7 +325,7 @@ function seedRoster(CS){
   {
     const D=F().contentDocument, W=F().contentWindow;
     seedRoster(CS);
-    CS.S.sets[0].stats['p0'] = Object.assign(CS.emptyStat(),
+    CS.M().sets[0].stats['p0'] = Object.assign(CS.emptyStat(),
       {kills:9, atkErr:3, atkAtt:20, aces:4, srvErr:2, srvAtt:19, passSum:31, passCount:14, digs:7, blocks:2});
     CS.commit();
     for(const w of [320,390]){
@@ -466,13 +466,13 @@ function seedRoster(CS){
   const exp = {
     us: CS.curSet().us, them: CS.curSet().them,
     serving: CS.curSet().serving, rotation: CS.curSet().rotation,
-    logs: CS.S.log.length, roster: CS.S.roster.length, team: CS.S.team, rev: CS.S.rev
+    logs: CS.M().log.length, roster: CS.S.roster.length, team: CS.S.team, rev: CS.S.rev
   };
   CS = await reloadApp();
   const got = {
     us: CS.curSet().us, them: CS.curSet().them,
     serving: CS.curSet().serving, rotation: CS.curSet().rotation,
-    logs: CS.S.log.length, roster: CS.S.roster.length, team: CS.S.team, rev: CS.S.rev
+    logs: CS.M().log.length, roster: CS.S.roster.length, team: CS.S.team, rev: CS.S.rev
   };
   ok('score survived', got.us===exp.us && got.them===exp.them, got.us+'-'+got.them);
   ok('serve and rotation survived', got.serving===exp.serving && got.rotation===exp.rotation,
@@ -495,17 +495,20 @@ function seedRoster(CS){
   const blob = JSON.stringify(CS.S);
   const parsed = JSON.parse(blob);
   ok('backup is valid JSON with a roster', Array.isArray(parsed.roster) && parsed.roster.length>0);
-  ok('backup carries the match', parsed.sets && parsed.sets[0].us===exp.us);
+  ok('backup carries the season', Array.isArray(parsed.matches) && parsed.matches.length>0,
+     (parsed.matches||[]).length + ' matches');
+  ok('backup carries the match score',
+     parsed.matches && parsed.matches[parsed.curMatch||0].sets[0].us===exp.us,
+     'us=' + (parsed.matches ? parsed.matches[parsed.curMatch||0].sets[0].us : '?'));
   ok('backup carries lineups and scouting keys',
      'savedLineups' in parsed && 'opponents' in parsed && 'matchPos' in parsed);
   /* wipe, then restore from the blob exactly as the Restore button does */
-  CS.S.roster = []; CS.S.sets = [CS.emptySet()]; CS.S.team=''; CS.commit();
+  CS.S.roster = []; CS.S.matches = [CS.emptyMatch()]; CS.S.curMatch = 0; CS.S.team=''; CS.commit();
   ok('state cleared before restore', CS.S.roster.length===0 && CS.curSet().us===0);
   const d = JSON.parse(blob);
-  CS.S.team = d.team; CS.S.roster = d.roster; CS.S.sets = d.sets;
-  CS.S.curSet = d.curSet; CS.S.log = d.log; CS.S.lineup = d.lineup;
-  CS.S.subLog = d.subLog; CS.S.opponents = d.opponents; CS.S.matchPos = d.matchPos;
-  CS.S.savedLineups = d.savedLineups; CS.commit();
+  const mig = CS.migrate(d);
+  for (const k in mig) CS.S[k] = mig[k];
+  CS.commit();
   ok('restore brings the roster back', CS.S.roster.length===exp.roster);
   ok('restore brings the score back', CS.curSet().us===exp.us && CS.curSet().them===exp.them);
   ok('restore brings serve and rotation back',
@@ -513,7 +516,159 @@ function seedRoster(CS){
   ok('restore brings the team name back', CS.S.team===exp.team, CS.S.team);
 
   /* ---------------------------------------------------------------- */
-  grp('16. cleanup — put your own data back');
+  grp('16. the season — a match no longer costs you the last one');
+  /* The three things the coach asked for after using it:
+       "I can't save one match then go to another one"
+       "I would like to be able to name the team we are playing against"
+       "the stats I would like them all show rather than just percentages" */
+  {
+    const D = F().contentDocument;
+
+    /* Check the constructor's own shape, not just behaviour. M() repairs a
+       malformed match on access, so a broken emptyMatch() produced perfectly
+       working matches and hid itself completely - every other assertion in
+       this file passed while emptyMatch was returning the wrong fields. */
+    const proto = CS.emptyMatch();
+    ok('a new match has its own sets', Array.isArray(proto.sets) && proto.sets.length===1,
+       Object.keys(proto).join(','));
+    ok('a new match has curSet, log and subLog',
+       proto.curSet===0 && Array.isArray(proto.log) && Array.isArray(proto.subLog));
+    ok('a new match does not carry season fields',
+       !('matches' in proto) && !('curMatch' in proto), Object.keys(proto).join(','));
+    ok('a new match has an id, a date and an opponent slot',
+       !!proto.id && /^\d{4}-\d{2}-\d{2}$/.test(proto.date) && proto.opponent==='',
+       proto.date);
+
+    seedRoster(CS);
+    CS.S.roster = Array.from({length:6},(_,i)=>({id:'m'+i,name:'M'+i,number:String(i+1),positions:['OH']}));
+    CS.S.lineup = { system:'5-1', order:['m0','m1','m2','m3','m4','m5'] };
+    CS.S.matches = [CS.emptyMatch()];
+    CS.S.curMatch = 0;
+    CS.commit();
+
+    /* play match one */
+    CS.M().opponent = 'Northern';
+    CS.curSet().serving = 'us';
+    for (let i=0;i<10;i++) CS.scorePoint('us');
+    CS.logStat('m0','Kill',{kills:1,atkAtt:1},'Attack');
+    CS.logStat('m0','Kill',{kills:1,atkAtt:1},'Attack');
+    CS.commit();
+    const firstId = CS.M().id;
+    ok('a match can be named', CS.M().opponent==='Northern', CS.M().opponent);
+    ok('match one has its score', CS.curSet().us===10, CS.curSet().us);
+
+    /* start match two - the old one must survive */
+    const m2 = CS.emptyMatch();
+    m2.opponent = 'Southside';
+    CS.S.matches.push(m2);
+    CS.S.curMatch = 1;
+    CS.commit();
+    ok('starting a new match keeps the old one', CS.S.matches.length===2, CS.S.matches.length+' matches');
+    ok('the new match starts empty', CS.curSet().us===0 && CS.curSet().them===0);
+    ok('the new match has its own name', CS.M().opponent==='Southside', CS.M().opponent);
+
+    CS.curSet().serving='them';
+    for (let i=0;i<4;i++) CS.scorePoint('them');
+    CS.logStat('m0','Kill',{kills:1,atkAtt:1},'Attack');
+    CS.commit();
+
+    /* the first match must be untouched by any of that */
+    const one = CS.S.matches.find(x=>x.id===firstId);
+    ok('match one still exists after playing match two', !!one);
+    ok('match one kept its score', one.sets[0].us===10, one.sets[0].us);
+    ok('match one kept its stats', CS.sumStats(one.sets,'m0').kills===2,
+       'K'+CS.sumStats(one.sets,'m0').kills);
+    ok('match one kept its name', one.opponent==='Northern', one.opponent);
+    ok('the two matches do not share a log',
+       one.log.length===2 && CS.S.matches[1].log.length===1,
+       one.log.length+' vs '+CS.S.matches[1].log.length);
+
+    /* switching back and forth must not blur them together */
+    CS.S.curMatch = 0; CS.commit();
+    ok('switching back lands on match one', CS.curSet().us===10 && CS.M().opponent==='Northern');
+    CS.S.curMatch = 1; CS.commit();
+    ok('switching forward lands on match two', CS.curSet().them===4 && CS.M().opponent==='Southside');
+
+    /* season totals must span both */
+    const seasonSets = CS.S.matches.reduce((a,m)=>a.concat(m.sets),[]);
+    const seasonK = CS.sumStats(seasonSets,'m0').kills;
+    const matchK = CS.sumStats(CS.M().sets,'m0').kills;
+    ok('season totals add every match', seasonK===3, 'season K'+seasonK);
+    ok('match totals stay scoped to one match', matchK===1, 'match K'+matchK);
+
+    /* the stat sheet: every tracked number, not just the derived ones */
+    CS.M().sets[0].stats['m0'] = Object.assign(CS.emptyStat(),
+      {kills:9,atkErr:3,atkAtt:22,aces:4,srvErr:2,srvAtt:20,passSum:33,passCount:15,digs:8,blocks:2});
+    CS.commit();
+    CS.go('stats'); await sleep(300);
+    const heads = [...D.querySelectorAll('.thead .tcell')].map(e=>e.textContent);
+    for (const col of ['K','E','TA','PCT','ACE','SE','TS','SRV%','RCV','AVG','D','B']) {
+      ok('stat sheet shows ' + col, heads.indexOf(col) >= 0, heads.join(' '));
+    }
+    ok('attempts are shown, not just percentages',
+       heads.indexOf('TA')>=0 && heads.indexOf('TS')>=0 && heads.indexOf('RCV')>=0);
+    const row = [...D.querySelectorAll('.trow')].find(r=>/M0/.test(r.textContent));
+    const cells = row ? [...row.querySelectorAll('.tcell')].map(e=>e.textContent) : [];
+    ok('total attacks shows the real count', cells[2]==='22', cells.join('|'));
+    ok('total serves shows the real count', cells[6]==='20', cells[6]);
+    ok('receptions show the real count', cells[8]==='15', cells[8]);
+    ok('a team row is present', [...D.querySelectorAll('.tname')].some(e=>e.textContent==='TEAM'));
+
+    /* A full box score is wider than a phone. It scrolls in its own box, and
+       the player column has to stay put or you lose track of whose row it is.
+       Compare against the SCROLLER, not the row - they move together exactly
+       when stickiness has failed. */
+    {
+      const W2 = F().contentWindow;
+      const tw = D.querySelector('.tablewrap');
+      ok('the stat table scrolls rather than squeezing', tw.scrollWidth > tw.clientWidth,
+         tw.scrollWidth + ' vs ' + tw.clientWidth);
+      const twL = tw.getBoundingClientRect().left;
+      tw.scrollLeft = 9999; await sleep(300);
+      const nameL = D.querySelector('.trow .tname').getBoundingClientRect().left - twL;
+      const rowL = D.querySelector('.trow').getBoundingClientRect().left - twL;
+      ok('the row really scrolled sideways', rowL < -50, 'row at ' + rowL.toFixed(0));
+      ok('the player column stays pinned while it does', Math.abs(nameL) < 3,
+         'name at ' + nameL.toFixed(0));
+      ok('the page itself never scrolls sideways',
+         D.documentElement.scrollWidth <= W2.innerWidth + 1);
+      tw.scrollLeft = 0; await sleep(200);
+    }
+
+    /* the three scopes */
+    for (const [k,label] of [['set','set'],['match','match'],['season','season']]) {
+      CS.V.statView = k; CS.render(); await sleep(200);
+      ok('stat sheet renders in '+label+' scope', D.querySelectorAll('.trow').length>0,
+         D.querySelectorAll('.trow').length+' rows');
+    }
+    CS.V.statView='match'; CS.go('track'); await sleep(200);
+    ok('the match bar names the current match', /Southside/.test((D.querySelector('.matchbar')||{}).textContent||''),
+       (D.querySelector('.matchbar .mb-t')||{}).textContent);
+  }
+
+  grp('17. the cached shell is the app, not some other page');
+  /* A looser scope test let any directory navigation overwrite ./index.html
+     in the cache with that directory's page - which bricks an installed app
+     until site data is cleared. Observed at /tools/. */
+  {
+    const W = F().contentWindow;
+    const names = await W.caches.keys();
+    ok('a cache exists', names.length>0, names.join(','));
+    if (names.length) {
+      const c = await W.caches.open(names[0]);
+      const hit = await c.match('./index.html');
+      ok('the shell is cached', !!hit);
+      if (hit) {
+        const txt = await hit.text();
+        ok('the cached shell is the Courtside app', txt.indexOf('<title>Courtside</title>') >= 0,
+           txt.length + ' bytes cached');
+        ok('the cached shell is a real document', txt.trim().indexOf('<!doctype html>') === 0);
+        ok('the cached shell is not some other page', txt.indexOf('Directory listing') < 0);
+      }
+    }
+  }
+
+  grp('18. cleanup — put your own data back');
   /* Restoring localStorage alone is NOT enough: the app keeps an IndexedDB
      mirror and takes whichever has the higher revision on boot, so a raw
      write loses to the test data still sitting in IDB. The restore has to go
@@ -522,11 +677,11 @@ function seedRoster(CS){
   CS = await reloadApp();
   if (prior) {
     for (const k of ['team','roster','sets','curSet','log','lineup','subLimit',
-                     'subLog','opponents','matchPos','savedLineups','activeLineupId','lastMatch'])
+                     'opponents','matchPos','savedLineups','activeLineupId','matches','curMatch'])
       if (k in prior) CS.S[k] = prior[k];
   } else {
-    CS.S.roster = CS.freshRoster(); CS.S.sets=[CS.emptySet()]; CS.S.curSet=0;
-    CS.S.log=[]; CS.S.subLog=[]; CS.S.team=''; CS.S.opponents=[]; CS.S.savedLineups=[];
+    CS.S.roster = CS.freshRoster(); CS.S.matches=[CS.emptyMatch()]; CS.S.curMatch=0;
+    CS.S.team=''; CS.S.opponents=[]; CS.S.savedLineups=[];
     CS.S.lineup={system:'5-1',order:[null,null,null,null,null,null]};
   }
   CS.commit();

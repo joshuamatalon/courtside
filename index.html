@@ -327,9 +327,28 @@ label.fld{display:block;font-size:10px;font-weight:700;letter-spacing:.1em;
 .logrow:last-child{border-bottom:none}
 .logempty{padding:var(--s4);text-align:center;color:var(--dim);font-size:12.5px}
 
+/* ------------------------------------------------------- match bar --- */
+.matchbar{display:block;width:100%;text-align:left;padding:12px var(--s4)}
+.matchbar .mb-t{font-size:15.5px;font-weight:700;letter-spacing:-.015em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.matchbar .mb-d{font-size:11.5px;color:var(--dim);margin-top:3px;
+  font-variant-numeric:tabular-nums}
+.matchbar .mb-chev{color:var(--accent);font-size:22px;font-weight:600;flex:none;line-height:1}
+
 /* ---------------------------------------------------------- table --- */
-/* The table scrolls inside its own box rather than squeezing the page. */
+/* A full box score does not fit a phone, and it should not be cut down to
+   fit - it scrolls inside its own box while the player column stays put, so
+   you never lose track of whose row you are reading. */
 .tablewrap{overflow-x:auto;overflow-y:hidden}
+.tablewrap .thead,.tablewrap .trow{min-width:max-content}
+.tablewrap .tname{position:sticky;left:0;z-index:1;background:var(--surface);
+  padding-right:var(--s2)}
+.tablewrap .thead .tname{background:var(--surface)}
+.grpcols{display:flex;font-size:8.5px;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--accent);padding:2px var(--s2) 2px;min-width:max-content}
+.grpcols .tname{position:sticky;left:0;z-index:1;background:var(--surface)}
+.grpcols span.g{text-align:center;border-bottom:1px solid var(--line-2);
+  margin:0 3px 3px;padding-bottom:2px}
 .thead{display:flex;font-size:9px;font-weight:700;color:var(--dim);
   text-transform:uppercase;letter-spacing:.08em;padding:4px var(--s2) 8px}
 .trow{display:flex;align-items:center;padding:9px var(--s2);
@@ -516,6 +535,19 @@ const emptyStat = () => ({
 });
 const emptySet = () => ({ us: 0, them: 0, stats: {}, serving: null, rotation: 0, points: [] });
 
+/* A match is the unit the season is made of. Everything that belongs to one
+   game - its sets, its event log, its subs, who it was against - lives inside
+   it, so starting the next game can never touch the last one. */
+const emptyMatch = () => ({
+  id: uid(),
+  date: todayISO(),
+  opponent: "",
+  sets: [emptySet()],
+  curSet: 0,
+  log: [],
+  subLog: []
+});
+
 /* Rotation. A player moves one zone clockwise each rotation:
    2 -> 1 -> 6 -> 5 -> 4 -> 3 -> 2. At rotation 0, serving order N stands in
    zone N. Verified exhaustively: valid permutation at every rotation, one
@@ -658,17 +690,14 @@ const S = {
   rev: 0,
   team: "",
   roster: freshRoster(),
-  sets: [emptySet()],
-  curSet: 0,
-  log: [],
+  matches: [],
+  curMatch: 0,
   lineup: { system: "5-1", order: [null, null, null, null, null, null] },
   subLimit: 15,
-  subLog: [],
   opponents: [],
   matchPos: {},
   savedLineups: [],
-  activeLineupId: null,
-  lastMatch: null      /* one-deep undo for "New match" */
+  activeLineupId: null
 };
 
 let saveState = "idle";
@@ -696,7 +725,26 @@ async function flushNow() {
   paintBadge();
 }
 
-const curSet = () => S.sets[S.curSet] || S.sets[0];
+/* Never index S.matches directly - a stale curMatch after a delete would
+   otherwise hand back undefined and take the whole screen with it. */
+function M() {
+  if (!Array.isArray(S.matches) || !S.matches.length) S.matches = [emptyMatch()];
+  if (S.curMatch < 0 || S.curMatch >= S.matches.length) S.curMatch = 0;
+  const m = S.matches[S.curMatch];
+  if (!m.sets || !m.sets.length) m.sets = [emptySet()];
+  if (m.curSet == null || m.curSet < 0 || m.curSet >= m.sets.length) m.curSet = 0;
+  if (!m.log) m.log = [];
+  if (!m.subLog) m.subLog = [];
+  return m;
+}
+const curSet = () => { const m = M(); return m.sets[m.curSet] || m.sets[0]; };
+const matchLabel = (m) => (m.opponent ? "vs " + m.opponent : "Match") + " · " + m.date;
+/* one team's totals for a whole match, used for the season list */
+function matchScore(m) {
+  let w = 0, l = 0;
+  for (const st of (m.sets || [])) { if (st.us > st.them) w++; else if (st.them > st.us) l++; }
+  return { setsWon: w, setsLost: l };
+}
 const playerById = (id) => S.roster.find((p) => p.id === id) || null;
 const statFor = (set, pid) => (set.stats[pid] || emptyStat());
 
@@ -957,20 +1005,35 @@ function viewTrack() {
   const noPoints = (set.points || []).length === 0;
   const hasLineup = S.lineup.order.some(Boolean);
 
+  /* Which game am I in? Answering that at the top of the live screen is what
+     makes a season of matches usable rather than confusing. */
+  const sc = matchScore(M());
+  wrap.appendChild(h("button", {
+    class: "panel matchbar",
+    onclick: () => openModal(matchListModal())
+  },
+    h("div", { class: "row" },
+      h("div", { class: "grow", style: { minWidth: "0" } },
+        h("div", { class: "mb-t" }, M().opponent ? "vs " + M().opponent : "Untitled match"),
+        h("div", { class: "mb-d" }, M().date + " · " + sc.setsWon + "–" + sc.setsLost +
+          " sets · match " + (S.curMatch + 1) + " of " + S.matches.length)),
+      h("span", { class: "chip", onclick: (e) => { e.stopPropagation(); openModal(editMatchModal()); } }, "Name"),
+      h("span", { class: "mb-chev" }, "›"))));
+
   /* ---- scoreboard ---- */
   const board = h("div", { class: "board" });
 
   const tabs = h("div", { class: "settabs" });
-  S.sets.forEach((_, i) => {
+  M().sets.forEach((_, i) => {
     tabs.appendChild(h("button", {
-      class: "settab" + (S.curSet === i ? " on" : ""),
-      onclick: () => { S.curSet = i; commit(); render(); }
+      class: "settab" + (M().curSet === i ? " on" : ""),
+      onclick: () => { M().curSet = i; commit(); render(); }
     }, "Set " + (i + 1)));
   });
-  if (S.sets.length < 5) {
+  if (M().sets.length < 5) {
     tabs.appendChild(h("button", {
       class: "settab add",
-      onclick: () => { S.sets.push(emptySet()); S.curSet = S.sets.length - 1; commit(); render(); }
+      onclick: () => { M().sets.push(emptySet()); M().curSet = M().sets.length - 1; commit(); render(); }
     }, "+"));
   }
   board.appendChild(tabs);
@@ -1008,7 +1071,7 @@ function viewTrack() {
 
   /* ---- court ---- */
   wrap.appendChild(h("div", { class: "row" },
-    h("h2", { class: "sec", style: { margin: "0" } }, "On court · Set " + (S.curSet + 1)),
+    h("h2", { class: "sec", style: { margin: "0" } }, "On court · Set " + (M().curSet + 1)),
     h("div", { class: "grow" }),
     h("button", {
       class: "btn quiet sm",
@@ -1047,9 +1110,9 @@ function viewTrack() {
 
   /* ---- player picker + stat keys ---- */
   wrap.appendChild(h("div", { class: "row" },
-    h("h2", { class: "sec", style: { margin: "0" } }, "Log a stat · Set " + (S.curSet + 1)),
+    h("h2", { class: "sec", style: { margin: "0" } }, "Log a stat · Set " + (M().curSet + 1)),
     h("div", { class: "grow" }),
-    h("button", { class: "btn quiet sm", onclick: () => openModal(confirmNewMatch()) }, "New match")));
+    h("button", { class: "btn quiet sm", onclick: () => openModal(matchListModal()) }, "Matches")));
 
   if (!S.roster.length) {
     wrap.appendChild(emptyCard("No players yet", "Add your roster first, then come back to log stats with a tap."));
@@ -1120,12 +1183,12 @@ function viewTrack() {
   }
 
   /* ---- recent log ---- */
-  const setLog = S.log.filter((e) => e.setIdx === S.curSet);
+  const setLog = M().log.filter((e) => e.setIdx === M().curSet);
   wrap.appendChild(h("div", { class: "row" },
-    h("h2", { class: "sec", style: { margin: "0" } }, "Recent · Set " + (S.curSet + 1)),
+    h("h2", { class: "sec", style: { margin: "0" } }, "Recent · Set " + (M().curSet + 1)),
     h("div", { class: "grow" }),
     h("button", {
-      class: "btn quiet sm", disabled: !S.log.length,
+      class: "btn quiet sm", disabled: !M().log.length,
       onclick: () => { undoStat(); }
     }, "↺ Undo last")));
   const lw = h("div", { class: "logwrap" });
@@ -1190,19 +1253,19 @@ function logStat(pid, label, deltas, group) {
   for (const k in deltas) cur[k] = (cur[k] || 0) + deltas[k];
   set.stats[pid] = cur;
   const p = playerById(pid);
-  S.log.unshift({
-    id: uid(), pid, deltas, setIdx: S.curSet,
+  M().log.unshift({
+    id: uid(), pid, deltas, setIdx: M().curSet,
     label: (p ? p.name : "?") + " · " + group + " · " + label
   });
-  if (S.log.length > 200) S.log.length = 200;
+  if (M().log.length > 200) M().log.length = 200;
   buzz(10);
   commit();
   render();
 }
 function undoStat() {
-  if (!S.log.length) return;
-  const last = S.log.shift();
-  const set = S.sets[last.setIdx];
+  if (!M().log.length) return;
+  const last = M().log.shift();
+  const set = M().sets[last.setIdx];
   if (set) {
     const cur = Object.assign({}, statFor(set, last.pid));
     for (const k in last.deltas) cur[k] = Math.max(0, (cur[k] || 0) - last.deltas[k]);
@@ -1212,31 +1275,145 @@ function undoStat() {
   render();
 }
 
-function confirmNewMatch() {
+/* Starting the next game no longer costs you the last one. Every match stays
+   in the season; this only creates a new one and switches to it. */
+function newMatchModal() {
+  const nameInp = h("input", { class: "inp", placeholder: "Who are you playing? (optional)" });
+  const dateInp = h("input", { type: "date", class: "inp mono", value: todayISO() });
+  const known = S.opponents.map((o) => o.name).filter(Boolean);
+  const box = h("div", { class: "panel modal" },
+    h("h2", { class: "sec" }, "New match"),
+    h("p", { class: "note", style: { marginTop: "0" } },
+      "Your current match is kept. Everything already logged stays in the season."),
+    h("label", { class: "fld", style: { marginTop: "14px" } }, "Opponent"),
+    nameInp);
+  if (known.length) {
+    const chips = h("div", { class: "wrapper", style: { marginTop: "8px" } });
+    for (const n of known) {
+      chips.appendChild(h("button", { class: "chip", onclick: () => { nameInp.value = n; } }, n));
+    }
+    box.appendChild(chips);
+  }
+  box.appendChild(h("label", { class: "fld", style: { marginTop: "14px" } }, "Date"));
+  box.appendChild(dateInp);
+  box.appendChild(h("div", { class: "row", style: { marginTop: "16px" } },
+    h("button", { class: "btn solid grow", onclick: () => {
+      const m = emptyMatch();
+      m.opponent = nameInp.value.trim();
+      m.date = dateInp.value || todayISO();
+      S.matches.push(m);
+      S.curMatch = S.matches.length - 1;
+      V.selected = null;
+      commit(); closeModal(); V.tab = "track"; render();
+    } }, "Start match"),
+    h("button", { class: "btn grow", onclick: closeModal }, "Cancel")));
+  return box;
+}
+
+/* The season, as a list you can move around in. */
+function matchListModal() {
+  const box = h("div", { class: "panel modal" });
+  box.appendChild(h("div", { class: "row" },
+    h("h2", { class: "sec grow", style: { margin: "0" } }, "Season · " + S.matches.length +
+      " match" + (S.matches.length === 1 ? "" : "es")),
+    h("button", { class: "btn quiet sm", onclick: closeModal }, "Close")));
+
+  const list = h("div", { style: { marginTop: "12px" } });
+  S.matches.forEach((m, i) => {
+    const sc = matchScore(m);
+    const pts = (m.sets || []).reduce((a, st) => a + st.us + st.them, 0);
+    list.appendChild(h("div", { class: "lnrow" + (i === S.curMatch ? " on" : "") },
+      h("button", {
+        class: "grow", style: { textAlign: "left", padding: "0", minWidth: "0" },
+        onclick: () => { S.curMatch = i; V.selected = null; commit(); closeModal(); render(); }
+      },
+        h("div", { class: "lnname" }, m.opponent ? "vs " + m.opponent : "Match " + (i + 1)),
+        h("div", { class: "lnsys" }, m.date + " · " + sc.setsWon + "–" + sc.setsLost +
+          " sets · " + pts + " rallies" + (i === S.curMatch ? " · current" : ""))),
+      h("button", {
+        class: "iconbtn",
+        title: "Delete this match",
+        onclick: () => openModal(h("div", { class: "panel modal" },
+          h("h2", { class: "sec" }, "Delete this match?"),
+          h("p", { class: "note" }, (m.opponent ? "vs " + m.opponent : "Match " + (i + 1)) +
+            " on " + m.date + ", and every stat in it. This cannot be undone."),
+          h("div", { class: "row" },
+            h("button", { class: "btn danger grow", onclick: () => {
+              S.matches.splice(i, 1);
+              if (!S.matches.length) S.matches = [emptyMatch()];
+              if (S.curMatch >= S.matches.length) S.curMatch = S.matches.length - 1;
+              commit(); closeModal(); render();
+            } }, "Delete it"),
+            h("button", { class: "btn grow", onclick: () => openModal(matchListModal()) }, "Keep it"))))
+      }, "×")));
+  });
+  box.appendChild(list);
+  box.appendChild(h("button", {
+    class: "btn solid wide", style: { marginTop: "14px" },
+    onclick: () => openModal(newMatchModal())
+  }, "+ New match"));
+  return box;
+}
+
+/* Naming the opponent after the fact, without starting over. */
+function editMatchModal() {
+  const m = M();
+  const nameInp = h("input", { class: "inp", placeholder: "Opponent", value: m.opponent || "" });
+  const dateInp = h("input", { type: "date", class: "inp mono", value: m.date });
   return h("div", { class: "panel modal" },
-    h("h2", { class: "sec" }, "Start a new match?"),
-    h("p", { class: "note" },
-      "Clears every set's score and stats, the event log and the sub log. " +
-      "Roster, lineups and scouting stay."),
-    h("p", { class: "note tiny" },
-      "The finished match is kept for one undo, so a mis-tap here is recoverable — " +
-      "but export a backup from the Roster tab if you want to keep it for good."),
-    h("div", { class: "row" },
-      h("button", { class: "btn danger grow", onclick: () => {
-        S.lastMatch = { sets: S.sets, curSet: S.curSet, log: S.log, subLog: S.subLog };
-        S.sets = [emptySet()]; S.curSet = 0; S.log = []; S.subLog = [];
+    h("h2", { class: "sec" }, "This match"),
+    h("label", { class: "fld", style: { marginTop: "10px" } }, "Opponent"),
+    nameInp,
+    h("label", { class: "fld", style: { marginTop: "12px" } }, "Date"),
+    dateInp,
+    h("div", { class: "row", style: { marginTop: "16px" } },
+      h("button", { class: "btn solid grow", onclick: () => {
+        m.opponent = nameInp.value.trim();
+        m.date = dateInp.value || m.date;
         commit(); closeModal(); render();
-      } }, "Start new match"),
+      } }, "Save"),
       h("button", { class: "btn grow", onclick: closeModal }, "Cancel")));
 }
 
 /* ============================================================== STATS == */
+/* Every tracked number, not just the derived ones. Attempts (TA, TS, RCV)
+   were being counted all along and never shown, which left percentages with
+   nothing underneath them to check against. */
+const STAT_COLS = [
+  { group: "Attack",  cols: [
+    { head: "K",    w: 38, get: (s) => s.kills },
+    { head: "E",    w: 38, bad: true, get: (s) => s.atkErr },
+    { head: "TA",   w: 42, get: (s) => s.atkAtt },
+    { head: "PCT",  w: 52, hi: true, get: (s) => fmt3(hitPct(s)) }
+  ]},
+  { group: "Serve",   cols: [
+    { head: "ACE",  w: 42, get: (s) => s.aces },
+    { head: "SE",   w: 38, bad: true, get: (s) => s.srvErr },
+    { head: "TS",   w: 42, get: (s) => s.srvAtt },
+    { head: "SRV%", w: 50, hi: true, get: (s) => pct(srvPct(s)) }
+  ]},
+  { group: "Receive", cols: [
+    { head: "RCV",  w: 44, get: (s) => s.passCount },
+    { head: "AVG",  w: 46, hi: true, get: (s) => fmt2(passAvg(s)) }
+  ]},
+  { group: "Def",     cols: [
+    { head: "D",    w: 38, get: (s) => s.digs },
+    { head: "B",    w: 38, get: (s) => s.blocks }
+  ]}
+];
+
 function viewStats() {
   const wrap = h("div", { class: "stack" });
-  if (!S.roster.length) { wrap.appendChild(emptyCard("No players yet", "Add players to see the leaderboard.")); return wrap; }
+  if (!S.roster.length) { wrap.appendChild(emptyCard("No players yet", "Add players to see the stat sheet.")); return wrap; }
 
+  const m = M();
+  const scopes = [
+    ["set", "Set " + (m.curSet + 1)],
+    ["match", "Match"],
+    ["season", "Season"]
+  ];
   const seg = h("div", { class: "seg" });
-  for (const [k, l] of [["match", "Match total"], ["set", "Set " + (S.curSet + 1)]]) {
+  for (const [k, l] of scopes) {
     seg.appendChild(h("button", {
       class: "btn" + (V.statView === k ? " solid" : ""),
       onclick: () => { V.statView = k; render(); }
@@ -1244,48 +1421,86 @@ function viewStats() {
   }
   wrap.appendChild(seg);
 
-  const agg = (pid) => V.statView === "set" ? statFor(curSet(), pid) : sumStats(S.sets, pid);
+  /* what the numbers cover, said out loud so a screenshot is never ambiguous */
+  const seasonSets = S.matches.reduce((a, x) => a + (x.sets || []).length, 0);
+  const scopeNote = V.statView === "set"
+    ? "Set " + (m.curSet + 1) + " of " + (m.opponent ? "the match vs " + m.opponent : "this match")
+    : V.statView === "match"
+      ? (m.opponent ? "All sets vs " + m.opponent : "All sets of this match") + " · " + m.date
+      : S.matches.length + " match" + (S.matches.length === 1 ? "" : "es") + " · " +
+        seasonSets + " sets · whole season";
+  wrap.appendChild(h("p", { class: "note tiny", style: { margin: "0 2px" } }, scopeNote));
 
-  const rows = S.roster.map((p) => ({ p, s: agg(p.id) }));
+  const setsFor = V.statView === "set" ? [curSet()]
+    : V.statView === "match" ? m.sets
+    : S.matches.reduce((a, x) => a.concat(x.sets || []), []);
 
-  /* Two tables, not one. Seven numeric columns plus a name cannot fit a phone,
-     and the way that failed was silent: the name column collapsed to zero and
-     the numbers stayed perfectly correct next to nobody. */
-  function table(title, cols) {
-    const box = h("div", { class: "panel tight" });
-    const inner = h("div", { class: "tablewrap" });
-    inner.appendChild(h("div", { class: "thead" },
-      h("span", { class: "tname" }, title),
-      cols.map((c) => h("span", { class: "tcell" }, c.head))));
-    for (const { p, s } of rows) {
-      inner.appendChild(h("div", { class: "trow" },
-        h("span", { class: "tname" },
-          h("span", { class: "tnum" }, "#" + (p.number || "–")), p.name || "—"),
-        cols.map((c) => h("span", { class: "tcell" + (c.hi ? " hi" : "") + (c.bad ? " bad" : "") },
-          c.get(s)))));
-    }
-    box.appendChild(inner);
-    return box;
+  const rows = S.roster.map((p) => ({ p, s: sumStats(setsFor, p.id) }));
+  const flat = STAT_COLS.reduce((a, g) => a.concat(g.cols), []);
+
+  const box = h("div", { class: "panel tight" });
+  const inner = h("div", { class: "tablewrap" });
+
+  /* group banner above the column heads */
+  const gRow = h("div", { class: "grpcols" },
+    h("span", { class: "tname", style: { minWidth: "84px" } }, ""));
+  for (const g of STAT_COLS) {
+    const w = g.cols.reduce((a, c) => a + c.w, 0);
+    gRow.appendChild(h("span", { class: "g", style: { width: (w - 6) + "px", flex: "none" } }, g.group));
+  }
+  inner.appendChild(gRow);
+
+  inner.appendChild(h("div", { class: "thead" },
+    h("span", { class: "tname", style: { minWidth: "84px" } }, "Player"),
+    flat.map((c) => h("span", { class: "tcell", style: { width: c.w + "px" } }, c.head))));
+
+  for (const { p, s } of rows) {
+    inner.appendChild(h("div", { class: "trow" },
+      h("span", { class: "tname", style: { minWidth: "84px" } },
+        h("span", { class: "tnum" }, "#" + (p.number || "–")), p.name || "—"),
+      flat.map((c) => h("span", {
+        class: "tcell" + (c.hi ? " hi" : "") + (c.bad ? " bad" : ""),
+        style: { width: c.w + "px" }
+      }, c.get(s)))));
   }
 
-  wrap.appendChild(table("Attack & passing", [
-    { head: "K",    get: (s) => s.kills },
-    { head: "AE",   get: (s) => s.atkErr, bad: true },
-    { head: "Hit%", get: (s) => fmt3(hitPct(s)), hi: true },
-    { head: "Pass", get: (s) => fmt2(passAvg(s)), hi: true }
-  ]));
+  /* a team row - the one line a coach reads out afterwards */
+  const team = sumStats(setsFor, "__none__");
+  for (const { s } of rows) for (const k in team) team[k] += s[k] || 0;
+  inner.appendChild(h("div", { class: "trow", style: { borderTop: "1px solid var(--line-2)" } },
+    h("span", { class: "tname", style: { minWidth: "84px", color: "var(--accent)" } }, "TEAM"),
+    flat.map((c) => h("span", {
+      class: "tcell" + (c.hi ? " hi" : ""), style: { width: c.w + "px" }
+    }, c.get(team)))));
 
-  wrap.appendChild(table("Serve & defense", [
-    { head: "Ace",  get: (s) => s.aces },
-    { head: "SE",   get: (s) => s.srvErr, bad: true },
-    { head: "Srv%", get: (s) => pct(srvPct(s)), hi: true },
-    { head: "Dig",  get: (s) => s.digs },
-    { head: "Blk",  get: (s) => s.blocks }
-  ]));
+  box.appendChild(inner);
+  wrap.appendChild(box);
 
   wrap.appendChild(h("p", { class: "note tiny" },
-    "AE = attack errors · SE = missed serves · Hit% = (kills − errors) ÷ attempts · " +
-    "Pass = average serve-receive rating 0–3 · Srv% = serves kept in play"));
+    "K kills · E attack errors · TA total attacks · PCT (K−E)÷TA · " +
+    "ACE aces · SE missed serves · TS total serves · SRV% serves kept in play · " +
+    "RCV serve-receives · AVG pass rating 0–3 · D digs · B blocks. Swipe the table sideways for more."));
+
+  /* per-match summary, so the season scope is not just one merged blob */
+  if (V.statView === "season" && S.matches.length > 1) {
+    wrap.appendChild(h("h2", { class: "sec" }, "Match by match"));
+    const list = h("div", { class: "panel tight" });
+    S.matches.forEach((mm, i) => {
+      const sc2 = matchScore(mm);
+      const pts = (mm.sets || []).reduce((a, st) => a + st.us + st.them, 0);
+      list.appendChild(h("button", {
+        class: "lnrow" + (i === S.curMatch ? " on" : ""),
+        style: { width: "100%", textAlign: "left" },
+        onclick: () => { S.curMatch = i; V.statView = "match"; commit(); render(); }
+      },
+        h("div", { class: "grow", style: { minWidth: "0" } },
+          h("div", { class: "lnname" }, mm.opponent ? "vs " + mm.opponent : "Match " + (i + 1)),
+          h("div", { class: "lnsys" }, mm.date + " · " + sc2.setsWon + "–" + sc2.setsLost +
+            " sets · " + pts + " rallies")),
+        h("span", { class: "mb-chev" }, "›")));
+    });
+    wrap.appendChild(list);
+  }
   return wrap;
 }
 
@@ -1410,7 +1625,7 @@ function viewSubs() {
     return wrap;
   }
 
-  const used = S.subLog.filter((s) => s.setIdx === S.curSet).length;
+  const used = M().subLog.filter((s) => s.setIdx === M().curSet).length;
   const left = S.subLimit - used;
 
   const head = h("div", { class: "panel" },
@@ -1419,7 +1634,7 @@ function viewSubs() {
         h("div", { style: { fontSize: "42px", fontWeight: "700", letterSpacing: "-.035em", lineHeight: ".92", fontVariantNumeric: "tabular-nums" } },
           used, h("span", { style: { color: "var(--dim)", fontSize: "22px", fontWeight: "600" } }, " / " + S.subLimit)),
         h("div", { style: { fontSize: "9.5px", fontWeight: "700", letterSpacing: ".13em", textTransform: "uppercase", color: "var(--dim)", marginTop: "6px" } },
-          "Subs used · Set " + (S.curSet + 1))),
+          "Subs used · Set " + (M().curSet + 1))),
       h("div", { style: { flex: "none", width: "92px" } },
         h("label", { class: "fld" }, "Limit / set"),
         h("input", {
@@ -1461,7 +1676,7 @@ function viewSubs() {
         onclick: () => {
           if (!V.subOut) return;
           S.lineup.order = S.lineup.order.map((o) => (o === V.subOut ? p.id : o));
-          S.subLog.unshift({ id: uid(), outId: V.subOut, inId: p.id, setIdx: S.curSet });
+          M().subLog.unshift({ id: uid(), outId: V.subOut, inId: p.id, setIdx: M().curSet });
           V.subOut = null;
           buzz(14);
           commit(); render();
@@ -1471,14 +1686,14 @@ function viewSubs() {
     wrap.appendChild(bw);
   }
 
-  const setSubs = S.subLog.filter((s) => s.setIdx === S.curSet);
+  const setSubs = M().subLog.filter((s) => s.setIdx === M().curSet);
   wrap.appendChild(h("div", { class: "row" },
-    h("h2", { class: "sec", style: { margin: "0" } }, "Sub log · Set " + (S.curSet + 1)),
+    h("h2", { class: "sec", style: { margin: "0" } }, "Sub log · Set " + (M().curSet + 1)),
     h("div", { class: "grow" }),
     h("button", {
-      class: "btn quiet sm", disabled: !S.subLog.length,
+      class: "btn quiet sm", disabled: !M().subLog.length,
       onclick: () => {
-        const last = S.subLog.shift();
+        const last = M().subLog.shift();
         if (last) S.lineup.order = S.lineup.order.map((o) => (o === last.inId ? last.outId : o));
         commit(); render();
       }
@@ -1695,14 +1910,8 @@ function viewRoster() {
       }, "Save backup"),
       h("button", { class: "btn grow", onclick: () => importFile.click() }, "Restore")),
     importFile,
-    S.lastMatch ? h("button", {
-      class: "btn wide", style: { marginTop: "10px" },
-      onclick: () => {
-        const lm = S.lastMatch;
-        S.sets = lm.sets; S.curSet = lm.curSet; S.log = lm.log; S.subLog = lm.subLog;
-        S.lastMatch = null; commit(); V.tab = "track"; render();
-      }
-    }, "↺ Undo “New match”") : null));
+    /* No "undo new match" any more - starting a match never destroys one. */
+    null));
 
   /* health + install */
   const hl = Store.health;
@@ -1714,7 +1923,7 @@ function viewRoster() {
     h("div", { class: "wrapper", style: { gap: "6px" } },
       h("span", { class: "pill" + (hl.lsOK ? "" : " err") }, "localStorage " + (hl.lsOK ? "OK" : "BLOCKED")),
       h("span", { class: "pill" + (hl.idbOK ? "" : " err") }, "IndexedDB " + (hl.idbOK ? "OK" : "BLOCKED")),
-      h("span", { class: "pill" }, S.sets.length + " sets"),
+      h("span", { class: "pill" }, S.matches.length + " matches"),
       h("span", { class: "pill" }, "rev " + S.rev),
       h("span", { class: "pill" + (swReady ? "" : " off") }, swReady ? "OFFLINE READY" : "OFFLINE NOT ARMED"))));
 
@@ -1741,7 +1950,8 @@ function viewRoster() {
             rev: 0, team: "", roster: freshRoster(), sets: [emptySet()], curSet: 0, log: [],
             lineup: { system: "5-1", order: [null, null, null, null, null, null] },
             subLimit: 15, subLog: [], opponents: [], matchPos: {},
-            savedLineups: [], activeLineupId: null, lastMatch: null
+            savedLineups: [], activeLineupId: null,
+            matches: [emptyMatch()], curMatch: 0
           });
           commit(); closeModal(); V.tab = "track"; render();
         } }, "Erase"),
@@ -1752,32 +1962,32 @@ function viewRoster() {
 }
 
 function confirmImport(d) {
+  /* Run the file through the same migration the app uses on boot, so a backup
+     taken from the old single-match build restores as a season rather than
+     being half-read. */
+  let mig = null;
+  try { mig = migrate(d); } catch (e) { mig = null; }
+  const nMatch = mig ? mig.matches.length : 0;
+  const nSets = mig ? mig.matches.reduce((a, m) => a + m.sets.length, 0) : 0;
   return h("div", { class: "panel modal" },
     h("h2", { class: "sec" }, "Restore this backup?"),
-    h("p", { class: "note" },
-      "It holds " + (d.roster || []).length + " players and " + (d.sets || []).length +
-      " set" + ((d.sets || []).length === 1 ? "" : "s") +
-      ". This replaces what is on this device right now."),
+    !mig
+      ? h("p", { class: "note" }, "That file could not be read as a Courtside backup.")
+      : h("p", { class: "note" },
+          "It holds " + (mig.roster || []).length + " players, " + nMatch +
+          " match" + (nMatch === 1 ? "" : "es") + " and " + nSets +
+          " set" + (nSets === 1 ? "" : "s") +
+          ". This replaces everything on this device right now."),
     h("div", { class: "row" },
-      h("button", { class: "btn solid grow", onclick: () => {
-        S.team = typeof d.team === "string" ? d.team : S.team;
-        S.roster = (d.roster || []).map((p) => Object.assign({}, p, {
-          positions: Array.isArray(p.positions) ? p.positions : (p.pos ? [p.pos] : [])
-        }));
-        S.sets = d.sets && d.sets.length ? d.sets : [emptySet()];
-        S.curSet = Math.min(d.curSet || 0, S.sets.length - 1);
-        S.log = d.log || [];
-        S.lineup = d.lineup || { system: "5-1", order: [null, null, null, null, null, null] };
-        S.subLimit = d.subLimit == null ? 15 : d.subLimit;
-        S.subLog = d.subLog || [];
-        S.opponents = d.opponents || [];
-        S.matchPos = d.matchPos || {};
-        S.savedLineups = d.savedLineups || [];
-        S.activeLineupId = d.activeLineupId == null ? null : d.activeLineupId;
+      mig ? h("button", { class: "btn solid grow", onclick: () => {
+        for (const k in mig) S[k] = mig[k];
+        if (!S.roster.length) S.roster = freshRoster();
+        V.selected = null;
         commit(); closeModal(); V.tab = "track"; render();
-      } }, "Restore"),
-      h("button", { class: "btn grow", onclick: closeModal }, "Cancel")));
+      } }, "Restore") : null,
+      h("button", { class: "btn grow", onclick: closeModal }, mig ? "Cancel" : "Close")));
 }
+
 function msgModal(title, text) {
   return h("div", { class: "panel modal" },
     h("h2", { class: "sec" }, title),
@@ -1832,32 +2042,100 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") keepAwake();
 });
 
-function hydrate(saved) {
-  if (!saved || typeof saved !== "object") return false;
-  S.rev = saved.rev || 0;
-  S.team = typeof saved.team === "string" ? saved.team : "";
-  if (Array.isArray(saved.roster) && saved.roster.length) {
-    S.roster = saved.roster.map((p) => Object.assign({}, p, {
+/* Turn any saved shape into the current one. The very first build stored a
+   single match at the top level (sets/curSet/log/subLog); a phone that has
+   been in use since then is carrying a real season in that shape, so this has
+   to lift it into matches[0] rather than start it over. Anything unreadable
+   yields an empty season instead of a crash. */
+function migrate(saved) {
+  const out = {
+    rev: saved.rev || 0,
+    team: typeof saved.team === "string" ? saved.team : "",
+    roster: [],
+    lineup: saved.lineup && Array.isArray(saved.lineup.order)
+      ? saved.lineup : { system: "5-1", order: [null, null, null, null, null, null] },
+    subLimit: saved.subLimit == null ? 15 : saved.subLimit,
+    opponents: Array.isArray(saved.opponents) ? saved.opponents : [],
+    matchPos: saved.matchPos || {},
+    savedLineups: Array.isArray(saved.savedLineups) ? saved.savedLineups : [],
+    activeLineupId: saved.activeLineupId == null ? null : saved.activeLineupId,
+    matches: [],
+    curMatch: 0
+  };
+
+  if (Array.isArray(saved.roster)) {
+    out.roster = saved.roster.map((p) => Object.assign({}, p, {
       positions: Array.isArray(p.positions) ? p.positions : (p.pos ? [p.pos] : [])
     }));
   }
-  if (Array.isArray(saved.sets) && saved.sets.length) S.sets = saved.sets;
-  S.curSet = Math.min(saved.curSet || 0, S.sets.length - 1);
-  S.log = Array.isArray(saved.log) ? saved.log : [];
-  S.lineup = saved.lineup && Array.isArray(saved.lineup.order)
-    ? saved.lineup : { system: "5-1", order: [null, null, null, null, null, null] };
-  S.subLimit = saved.subLimit == null ? 15 : saved.subLimit;
-  S.subLog = Array.isArray(saved.subLog) ? saved.subLog : [];
-  S.opponents = Array.isArray(saved.opponents) ? saved.opponents : [];
-  S.matchPos = saved.matchPos || {};
-  S.savedLineups = Array.isArray(saved.savedLineups) ? saved.savedLineups : [];
-  S.activeLineupId = saved.activeLineupId == null ? null : saved.activeLineupId;
-  S.lastMatch = saved.lastMatch || null;
-  for (const s of S.sets) {
-    if (!s.stats) s.stats = {};
-    if (!s.points) s.points = [];
-    if (s.rotation == null) s.rotation = 0;
+
+  const fixSets = (sets) => (Array.isArray(sets) && sets.length ? sets : [emptySet()])
+    .map((st) => Object.assign({ us: 0, them: 0, serving: null }, st, {
+      stats: st && st.stats ? st.stats : {},
+      points: st && Array.isArray(st.points) ? st.points : [],
+      rotation: st && st.rotation != null ? st.rotation : 0
+    }));
+
+  if (Array.isArray(saved.matches) && saved.matches.length) {
+    /* already a season */
+    out.matches = saved.matches.map((m) => ({
+      id: m.id || uid(),
+      date: m.date || todayISO(),
+      opponent: typeof m.opponent === "string" ? m.opponent : "",
+      sets: fixSets(m.sets),
+      curSet: Math.min(m.curSet || 0, Math.max(0, fixSets(m.sets).length - 1)),
+      log: Array.isArray(m.log) ? m.log : [],
+      subLog: Array.isArray(m.subLog) ? m.subLog : []
+    }));
+    out.curMatch = Math.min(saved.curMatch || 0, out.matches.length - 1);
+  } else {
+    /* the old single-match shape - lift it in, do not discard it */
+    const sets = fixSets(saved.sets);
+    const played = sets.some((st) => st.us > 0 || st.them > 0) ||
+                   (Array.isArray(saved.log) && saved.log.length > 0);
+    const first = {
+      id: uid(),
+      date: todayISO(),
+      opponent: "",
+      sets: sets,
+      curSet: Math.min(saved.curSet || 0, sets.length - 1),
+      log: Array.isArray(saved.log) ? saved.log : [],
+      subLog: Array.isArray(saved.subLog) ? saved.subLog : []
+    };
+    out.matches = [first];
+    /* the old "New match" kept one previous match for undo - it is a real
+       game and belongs in the season now, oldest first */
+    const lm = saved.lastMatch;
+    if (lm && Array.isArray(lm.sets) && lm.sets.length) {
+      const prevSets = fixSets(lm.sets);
+      const prevPlayed = prevSets.some((st) => st.us > 0 || st.them > 0);
+      if (prevPlayed) {
+        out.matches.unshift({
+          id: uid(),
+          date: todayISO(),
+          opponent: "",
+          sets: prevSets,
+          curSet: Math.min(lm.curSet || 0, prevSets.length - 1),
+          log: Array.isArray(lm.log) ? lm.log : [],
+          subLog: Array.isArray(lm.subLog) ? lm.subLog : []
+        });
+        out.curMatch = 1;
+      }
+    }
+    if (!played && out.matches.length === 1) out.curMatch = 0;
   }
+
+  if (!out.matches.length) out.matches = [emptyMatch()];
+  return out;
+}
+
+function hydrate(saved) {
+  if (!saved || typeof saved !== "object") return false;
+  let next;
+  try { next = migrate(saved); }
+  catch (e) { return false; }   /* keep the running defaults rather than crash */
+  for (const k in next) S[k] = next[k];
+  if (!S.roster.length) S.roster = freshRoster();
   saveState = "saved";
   savedAt = null;
   return true;
@@ -1884,6 +2162,7 @@ async function boot() {
 /* test surface - lets a harness assert on real state instead of pixels */
 window.CS = {
   S, V, Store, commit, render,
+  M, emptyMatch, matchScore, migrate, matchLabel,
   zoneForServeOrder, applyPoint, emptyStat, emptySet, sumStats,
   hitPct, passAvg, srvPct, fmt2, fmt3, pct,
   scorePoint, undoPoint, logStat, undoStat, applyLineup, playerById, curSet,

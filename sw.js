@@ -5,7 +5,7 @@
 /* Bump this string to push an update to installed phones. Changing sw.js at
    all is what makes the browser re-check it; the activate handler then drops
    every older cache. */
-const CACHE = "courtside-v2";
+const CACHE = "courtside-v3";
 const SHELL = [
   "./",
   "./index.html",
@@ -48,11 +48,15 @@ self.addEventListener("fetch", (e) => {
      installed phone would keep serving the first version it ever cached and
      could never be updated. */
   if (req.mode === "navigate") {
-    /* Only the app itself gets the offline shell. Without this guard every
-       same-origin page (tools/selftest.html, anything added later) would be
-       silently answered with index.html. */
+    /* Match the app's OWN address exactly, not "any path ending in a slash".
+       That looser test meant navigating to any subdirectory - /tools/, say -
+       took the app branch, fetched that directory's page, and wrote it into
+       the cache under ./index.html. The app shell was then permanently
+       replaced by a directory listing, which on an installed phone bricks it
+       until someone clears site data. Observed, not theorised. */
+    const root = new URL("./", self.registration.scope).pathname;
     const p = url.pathname;
-    const isApp = p === "/" || /\/index\.html$/.test(p) || /\/$/.test(p);
+    const isApp = p === root || p === root + "index.html";
     if (!isApp) {
       e.respondWith(fetch(req).catch(() => caches.match(req)));
       return;
@@ -60,7 +64,11 @@ self.addEventListener("fetch", (e) => {
     e.respondWith(
       caches.match("./index.html").then((hit) => {
         const fresh = fetch(req).then((res) => {
-          if (res && res.ok) caches.open(CACHE).then((c) => c.put("./index.html", res.clone()));
+          /* only ever cache the shell under the shell's key, and only when
+             the response really is the shell */
+          if (res && res.ok && res.type === "basic" && isApp) {
+            caches.open(CACHE).then((c) => c.put("./index.html", res.clone()));
+          }
           return res;
         }).catch(() => null);
         return hit || fresh.then((r) => r || caches.match("./"));

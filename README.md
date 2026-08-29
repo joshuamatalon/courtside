@@ -11,12 +11,18 @@ Ported off the claude.ai artifact on 2026-08-25. Shares its entire design system
 
 ## What it does
 
+- **Season** — every match is kept. The bar at the top of Track says which game you
+  are in; tap it for the season list to switch, rename, add or delete a match. Starting
+  a new match never touches the last one.
 - **Track** — tap Point US / Point THEM every rally. Score, who is serving, and which
   of the six rotations you are in all track themselves. The court diagram below shows
   exactly where everyone should be standing, with the setter ringed and Zone 1 starred.
   Tap a player, tap what they just did, and it lands in that set's stats.
-- **Stats** — kills, attack errors, hitting %, serve-receive pass average, aces, missed
-  serves, serve %, digs and blocks. Match totals or the current set.
+- **Stats** — a full box score: K, E, TA, PCT, ACE, SE, TS, SRV%, RCV, AVG, D, B, plus
+  a team row. Every raw count is shown, not just the derived percentages — the attempts
+  behind them (TA, TS, RCV) were being tracked all along and never displayed. Scope it
+  to the current set, the match, or the whole season; the player column stays pinned
+  while the table scrolls sideways.
 - **Lineup** — 5-1 / 6-2 / 4-2, the starting six in serving order, who plays what
   position this match, and a browser for all six rotations. Save named lineups for
   the season and load one in a tap.
@@ -96,9 +102,15 @@ reloading recovered the score, serve and rotation.)
 **Still take backups.** **Roster → Save backup** writes a JSON file; **Restore** reads
 it back. That is also how you move a season between phones.
 
-**"New match" is undoable once.** It stashes the finished match, and an
-**Undo "New match"** button appears under Backup until you start another. Export if you
-want to keep a match for good — there is still no season history (see Known limits).
+**Every match is kept.** Starting a new one adds it to the season rather than replacing
+anything. The season list (tap the match bar on Track) is where you switch between them,
+rename an opponent, or delete one deliberately.
+
+**Upgrading from the single-match build keeps your data.** A save from the old shape is
+lifted into the season on first open — scores, rotations, stats, logs and subs all
+survive, and the one match the old build kept for "undo" becomes a real season match
+rather than being thrown away. Verified with 24 assertions against a realistic old save,
+including that migrating twice changes nothing and that garbage input cannot crash it.
 
 ---
 
@@ -142,11 +154,12 @@ python -m http.server 8788 --bind 127.0.0.1
 # then open http://127.0.0.1:8788/tools/selftest.html
 ```
 
-**114 assertions** driving the real app in a frame: rotation geometry, sideout scoring,
+**163 assertions** driving the real app in a frame: rotation geometry, sideout scoring,
 undo-point unwinding, stat maths, saved-lineup apply/save-over, subs updating the live
 court, no sideways scroll at 320/360/390/430 px, a locked nav bar, tap targets, the
 iOS zoom rules, every screen rendering, persistence across a reload, IndexedDB rescue,
-the backup round trip, and the live scoring loop itself.
+the backup round trip, the live scoring loop, the season model and its
+migration from the old single-match save.
 
 It backs your data up before it runs and restores it afterwards **through the app's own
 save path** — restoring localStorage alone is not enough, because the IndexedDB mirror
@@ -206,7 +219,20 @@ one point, rotations stayed legal in all three sets, match totals equalled the s
 the sets, and the whole thing came to **17 KB**. The 200-entry event log caps *undo
 depth*, never the stats themselves — those live separately and are never trimmed.
 
-## Three bugs found by looking
+## Five bugs found by looking
+
+**The service worker could replace the app with another page.** Its "is this the app?"
+test accepted any path ending in a slash, so navigating to a subdirectory took the app
+branch, fetched *that* page, and wrote it into the cache under `./index.html`. The shell
+was then permanently a directory listing — on an installed phone that bricks the app
+until someone clears site data. Found by navigating to `/tools/` during testing. It now
+matches the app's own scope exactly, and the suite asserts the cached shell really is
+Courtside.
+
+**A new match was built with the wrong fields.** `emptyMatch()` returned the season's
+fields instead of a match's. Every test still passed, because the accessor repairs a
+malformed match on read — the defensiveness hid the defect completely. The suite now
+checks the constructor's shape directly rather than only the behaviour built on it.
 
 Neither threw an error and neither looked broken in a quick glance.
 
@@ -242,8 +268,6 @@ No npm, no framework, no build. Edit `index.html` in any text editor and reload.
 
 ## Known limits
 
-- **No season history.** "New match" clears the match (undoable once). There are no
-  per-match archives or season-long totals. The coach was asked and has not answered.
 - **Each phone is its own island.** Nothing syncs between coaches. Two coaches logging
   produce two separate stat sheets; moving data means Save backup → send file → Restore.
 - **Substitution legality is not enforced** — only a raw count against a limit. No
