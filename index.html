@@ -681,7 +681,36 @@ const Store = (() => {
       try { localStorage.setItem(LS_KEY, JSON.stringify(state)); return true; }
       catch (e) { lastErr = "localStorage write failed: " + e.message; return false; }
     },
-    async saveMirror(state) { return idbSet("state", state); }
+    async saveMirror(state) { return idbSet("state", state); },
+
+    /* A small durable queue, used for requests written in a gym with no
+       signal. Kept in IndexedDB rather than localStorage so the main save is
+       never competing with it for the same budget. */
+    async queuePut(item) { return idbSet("q:" + item.id, item); },
+    async queueDel(id) {
+      if (!db) return;
+      try {
+        const tx = db.transaction(DB_STORE, "readwrite");
+        tx.objectStore(DB_STORE).delete("q:" + id);
+      } catch (e) {}
+    },
+    async queueAll() {
+      if (!db) return [];
+      return new Promise((res) => {
+        try {
+          const tx = db.transaction(DB_STORE, "readonly");
+          const out = [];
+          const r = tx.objectStore(DB_STORE).openCursor();
+          r.onsuccess = () => {
+            const c = r.result;
+            if (!c) return res(out);
+            if (String(c.key).slice(0, 2) === "q:") out.push(c.value);
+            c.continue();
+          };
+          r.onerror = () => res(out);
+        } catch (e) { res([]); }
+      });
+    }
   };
 })();
 
@@ -697,7 +726,11 @@ const S = {
   opponents: [],
   matchPos: {},
   savedLineups: [],
-  activeLineupId: null
+  activeLineupId: null,
+  /* Asking for a change without going through anyone. The token is pasted in
+     once on this phone and never leaves it - it is not in this file and not in
+     the repository. */
+  requests: { token: "", who: "", sent: [] }
 };
 
 let saveState = "idle";
@@ -1884,6 +1917,97 @@ function viewRoster() {
   }, "+ Add a player"));
 
   /* backup */
+  /* ---- ask for a change ------------------------------------------- */
+  wrap.appendChild(h("h2", { class: "sec" }, "Ask for a change"));
+  const rq = S.requests;
+  const rbox = h("div", { class: "panel" });
+
+  if (!rq.token) {
+    rbox.appendChild(h("p", { class: "note", style: { marginTop: "0" } },
+      "Paste the access code you were given. It is stored only on this phone, " +
+      "and you only ever do this once."));
+    const tk = h("input", { class: "inp mono", type: "password", placeholder: "Access code" });
+    const nm = h("input", { class: "inp", placeholder: "Your name (optional)", value: rq.who || "" });
+    rbox.appendChild(tk);
+    rbox.appendChild(h("div", { style: { height: "10px" } }));
+    rbox.appendChild(nm);
+    rbox.appendChild(h("button", {
+      class: "btn solid wide", style: { marginTop: "12px" },
+      onclick: () => {
+        rq.token = tk.value.trim();
+        rq.who = nm.value.trim();
+        commit(); render();
+      }
+    }, "Save"));
+  } else {
+    rbox.appendChild(h("p", { class: "note", style: { marginTop: "0" } },
+      "Say what you want changed or added, in your own words. It gets built and " +
+      "the app updates itself \u2014 you do not need to message anyone."));
+    /* its own class: the roster screen already has a textarea (Paste names),
+       and "the first textarea" is not a stable way to mean this one */
+    const ta = h("textarea", { class: "inp reqbox",
+      placeholder: "e.g. I want to see each player's serving stats broken out by set" });
+    rbox.appendChild(ta);
+    const status = h("p", { class: "note tiny", style: { minHeight: "18px" } });
+    const send = h("button", { class: "btn solid wide", style: { marginTop: "10px" } }, "Send request");
+    send.onclick = async () => {
+      const text = ta.value.trim();
+      if (!text) return;
+      send.disabled = true;
+      status.textContent = "Sending\u2026";
+      status.style.color = "var(--dim)";
+      try {
+        if (!navigator.onLine) throw new Error("offline");
+        const n = await sendRequest(text);
+        ta.value = "";
+        status.textContent = "Sent. It is being worked on now \u2014 the reply appears below.";
+        status.style.color = "var(--ok)";
+        setTimeout(render, 1200);
+      } catch (e) {
+        if (!navigator.onLine || /offline|failed to fetch|network/i.test(e.message)) {
+          /* no signal in the gym - keep it and send it later, same as photos */
+          await Store.queuePut({ id: uid(), kind: "request", text: text, at: Date.now() });
+          ta.value = "";
+          status.textContent = "No signal, so it is saved on your phone and sends itself later.";
+          status.style.color = "var(--g2)";
+        } else {
+          status.textContent = e.message;
+          status.style.color = "var(--bad)";
+        }
+      }
+      send.disabled = false;
+    };
+    rbox.appendChild(send);
+    rbox.appendChild(status);
+    rbox.appendChild(h("button", {
+      class: "btn quiet wide", style: { marginTop: "2px" },
+      onclick: () => { rq.token = ""; commit(); render(); }
+    }, "Forget the access code"));
+  }
+  wrap.appendChild(rbox);
+
+  /* ---- what came back --------------------------------------------- */
+  if (rq.sent.length) {
+    wrap.appendChild(h("div", { class: "row" },
+      h("h2", { class: "sec grow", style: { margin: "0" } }, "Your requests"),
+      h("button", { class: "btn quiet sm", onclick: () => refreshRequests() }, "\u21bb Check for replies")));
+    const list = h("div", { class: "panel tight" });
+    for (const r of rq.sent.slice(0, 8)) {
+      list.appendChild(h("div", { class: "lnrow", style: { alignItems: "flex-start" } },
+        h("div", { class: "grow", style: { minWidth: "0" } },
+          h("div", { class: "lnname" }, r.title),
+          h("div", { class: "lnsys" }, r.at + " \u00b7 " +
+            (r.state === "closed" ? "done" : "being worked on")),
+          r.reply
+            ? h("div", { class: "note tiny", style: { marginTop: "6px", color: "var(--text-2)" } }, r.reply)
+            : null),
+        h("span", { class: "chip", style: r.state === "closed"
+          ? { color: "var(--g3)", borderColor: "var(--g3-line)" } : {} },
+          r.state === "closed" ? "done" : "in progress")));
+    }
+    wrap.appendChild(list);
+  }
+
   wrap.appendChild(h("h2", { class: "sec" }, "Backup"));
   const importFile = h("input", { type: "file", accept: "application/json,.json", class: "hide",
     onchange: (e) => {
@@ -1995,6 +2119,93 @@ function msgModal(title, text) {
     h("button", { class: "btn wide", onclick: closeModal }, "OK"));
 }
 
+/* =========================================================== REQUESTS ==
+   The coach asks for a change from inside the app. It becomes an issue on the
+   repository, which starts a build; the reply comes back to this same screen.
+   Nobody has to relay anything. The token lives only in this browser. */
+const REPO = "joshuamatalon/courtside";
+const GH = "https://api.github.com/repos/" + REPO;
+
+function ghHeaders() {
+  return {
+    "Authorization": "Bearer " + (S.requests.token || ""),
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "Content-Type": "application/json"
+  };
+}
+
+async function sendRequest(text) {
+  const who = (S.requests.who || "").trim();
+  const first = text.trim().split("\n")[0].slice(0, 70);
+  const res = await fetch(GH + "/issues", {
+    method: "POST",
+    headers: ghHeaders(),
+    body: JSON.stringify({
+      title: first || "Request from the app",
+      body: text.trim() + "\n\n---\nSent from Courtside" + (who ? " by " + who : "") + ".",
+      labels: ["coach-request"]
+    })
+  });
+  if (!res.ok) {
+    let why = "";
+    try { const j = await res.json(); why = j.message || ""; } catch (e) {}
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("That access code was not accepted. Check it in Setup, or ask for a new one.");
+    }
+    throw new Error("Could not send (" + res.status + (why ? ": " + why : "") + ").");
+  }
+  const issue = await res.json();
+  S.requests.sent.unshift({
+    id: uid(), number: issue.number, title: issue.title,
+    at: new Date().toISOString().slice(0, 10),
+    state: "open", reply: ""
+  });
+  if (S.requests.sent.length > 30) S.requests.sent.length = 30;
+  commit();
+  return issue.number;
+}
+
+/* Queued when there is no signal, sent when there is. */
+async function flushRequestQueue() {
+  if (!navigator.onLine || !S.requests.token) return 0;
+  const q = await Store.queueAll();
+  let sent = 0;
+  for (const item of q) {
+    if (!item || item.kind !== "request") continue;
+    try { await sendRequest(item.text); await Store.queueDel(item.id); sent++; }
+    catch (e) { break; }
+  }
+  if (sent) render();
+  return sent;
+}
+
+/* Pull the latest reply for each request so the answer shows up in the app. */
+async function refreshRequests() {
+  if (!navigator.onLine || !S.requests.token || !S.requests.sent.length) return;
+  let changed = false;
+  for (const r of S.requests.sent.slice(0, 8)) {
+    try {
+      const iss = await fetch(GH + "/issues/" + r.number, { headers: ghHeaders() });
+      if (!iss.ok) continue;
+      const j = await iss.json();
+      if (j.state && j.state !== r.state) { r.state = j.state; changed = true; }
+      const cs = await fetch(GH + "/issues/" + r.number + "/comments?per_page=100",
+        { headers: ghHeaders() });
+      if (!cs.ok) continue;
+      const list = await cs.json();
+      if (Array.isArray(list) && list.length) {
+        const reply = String(list[list.length - 1].body || "").split(String.fromCharCode(10) + "---")[0].trim().slice(0, 700);
+        if (reply !== r.reply) { r.reply = reply; changed = true; }
+      }
+    } catch (e) { /* offline or rate limited - leave what we have */ }
+  }
+  /* Only write when something actually came back. Every commit bumps the
+     revision, and a revision that moves on its own makes "did my data
+     survive?" impossible to answer. */
+  if (changed) { commit(); render(); }
+}
+
 /* ============================================================== MISC == */
 const todayISO = () => {
   const d = new Date();
@@ -2020,7 +2231,7 @@ let deferredInstall = null;
 let swReady = false;
 
 window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredInstall = e; });
-window.addEventListener("online", paintBadge);
+window.addEventListener("online", () => { paintBadge(); flushRequestQueue().catch(() => {}); });
 window.addEventListener("offline", paintBadge);
 for (const ev of ["pagehide", "blur", "visibilitychange"]) {
   window.addEventListener(ev, () => {
@@ -2059,6 +2270,10 @@ function migrate(saved) {
     matchPos: saved.matchPos || {},
     savedLineups: Array.isArray(saved.savedLineups) ? saved.savedLineups : [],
     activeLineupId: saved.activeLineupId == null ? null : saved.activeLineupId,
+    requests: (saved.requests && typeof saved.requests === "object")
+      ? { token: saved.requests.token || "", who: saved.requests.who || "",
+          sent: Array.isArray(saved.requests.sent) ? saved.requests.sent : [] }
+      : { token: "", who: "", sent: [] },
     matches: [],
     curMatch: 0
   };
@@ -2153,6 +2368,12 @@ async function boot() {
   if (deep && (deep.rev || 0) > (S.rev || 0)) { hydrate(deep); render(); }
   else { paintBadge(); storageWarning(); }
 
+  /* opening the app with signal is the natural moment to send anything that
+     was written in the gym and to pick up any reply */
+  if (navigator.onLine && S.requests && S.requests.token) {
+    flushRequestQueue().then(() => refreshRequests()).catch(() => {});
+  }
+
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
     try { await navigator.serviceWorker.register("sw.js"); swReady = true; }
     catch (e) { swReady = false; }
@@ -2163,6 +2384,7 @@ async function boot() {
 window.CS = {
   S, V, Store, commit, render,
   M, emptyMatch, matchScore, migrate, matchLabel,
+  sendRequest, refreshRequests, flushRequestQueue, REPO,
   zoneForServeOrder, applyPoint, emptyStat, emptySet, sumStats,
   hitPct, passAvg, srvPct, fmt2, fmt3, pct,
   scorePoint, undoPoint, logStat, undoStat, applyLineup, playerById, curSet,

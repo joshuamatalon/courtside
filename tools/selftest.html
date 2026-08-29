@@ -668,7 +668,103 @@ function seedRoster(CS){
     }
   }
 
-  grp('18. cleanup — put your own data back');
+  grp('18. asking for a change from inside the app');
+  /* The coach types a request here and it becomes a GitHub issue, which starts
+     a build. Nobody relays it. These check the shape of what we would really
+     send, with the network mocked - never file a real issue from a test. */
+  {
+    const D = F().contentDocument, W = F().contentWindow;
+    const box = () => D.querySelector('main textarea.reqbox');
+    const sendBtn = () => [...D.querySelectorAll('.btn.solid.wide')]
+      .find(b => b.textContent === 'Send request');
+
+    CS.S.requests = { token: '', who: '', sent: [] };
+    CS.commit(); CS.go('roster'); await sleep(350);
+    ok('the panel is there', /Ask for a change/.test(D.querySelector('main').textContent));
+    ok('it will not send until a code is stored', !box());
+
+    CS.S.requests = { token: 'TESTCODE', who: 'Coach', sent: [] };
+    CS.commit(); CS.go('roster'); await sleep(350);
+    ok('with a code, the request box appears', !!box());
+    /* its own class on purpose: the roster screen already has a textarea
+       (Paste names), and "the first textarea" silently meant the wrong one */
+    ok('the request box is not confusable with Paste names',
+       D.querySelectorAll('main textarea.inp').length > 1 &&
+       D.querySelectorAll('main textarea.reqbox').length === 1);
+
+    const realFetch = W.fetch;
+    let captured = null;
+    W.fetch = async (url, opts) => {
+      const u = String(url);
+      if (/\/issues$/.test(u) && opts && opts.method === 'POST') {
+        captured = { url: u, headers: opts.headers, body: JSON.parse(opts.body) };
+        return { ok: true, status: 201, json: async () => ({ number: 99, title: captured.body.title, state: 'open' }) };
+      }
+      if (/\/issues\/99$/.test(u)) return { ok: true, status: 200, json: async () => ({ state: 'closed' }) };
+      if (/comments/.test(u)) return { ok: true, status: 200,
+        json: async () => ([{ body: 'Done. Close and reopen the app twice.\n---\nfooter' }]) };
+      return { ok: true, status: 200, json: async () => ([]) };
+    };
+
+    box().value = 'Show serving stats per set';
+    sendBtn().click(); await sleep(800);
+    ok('tapping Send really sends', !!captured, captured ? captured.body.title : 'nothing sent');
+    ok('it goes to the right repository',
+       captured && captured.url.indexOf('api.github.com/repos/' + CS.REPO + '/issues') >= 0,
+       captured && captured.url);
+    ok('it carries the stored code', captured && captured.headers.Authorization === 'Bearer TESTCODE');
+    /* the label is what makes the workflow pick it up - without it nothing runs */
+    ok('it is labelled coach-request', captured && captured.body.labels.indexOf('coach-request') >= 0,
+       captured && captured.body.labels.join(','));
+    ok('his own words are in the body', captured && /serving stats per set/i.test(captured.body.body));
+    ok('the box is cleared after sending', box() && box().value === '');
+    ok('it is recorded on the phone', CS.S.requests.sent.length === 1);
+
+    await CS.refreshRequests(); await sleep(300);
+    const r0 = CS.S.requests.sent[0];
+    ok('the reply comes back into the app', /Done\./.test(r0.reply || ''), (r0.reply || '').slice(0, 40));
+    ok('the machine-readable footer is stripped', !/footer/.test(r0.reply || ''));
+    ok('it shows as done once closed', r0.state === 'closed', r0.state);
+    CS.go('roster'); await sleep(300);
+    ok('the reply is readable in the app', /Done\./.test(D.querySelector('main').textContent));
+
+    /* a gym with no signal must not lose what he typed */
+    CS.S.requests.sent = []; CS.commit(); CS.go('roster'); await sleep(300);
+    Object.defineProperty(W.navigator, 'onLine', { configurable: true, get: () => false });
+    let tries = 0;
+    W.fetch = async () => { tries++; throw new Error('network'); };
+    box().value = 'Add libero tracking';
+    sendBtn().click(); await sleep(800);
+    ok('nothing is attempted with no signal', tries === 0, tries + ' calls');
+    const q = (await CS.Store.queueAll()).filter(x => x.kind === 'request');
+    ok('it is kept on the phone instead', q.length === 1, q.length + ' queued');
+    ok('his words survive intact', q[0] && /libero/.test(q[0].text));
+
+    Object.defineProperty(W.navigator, 'onLine', { configurable: true, get: () => true });
+    let flushed = null;
+    W.fetch = async (url, opts) => {
+      if (/\/issues$/.test(String(url)) && opts && opts.method === 'POST') {
+        flushed = JSON.parse(opts.body);
+        return { ok: true, status: 201, json: async () => ({ number: 100, title: flushed.title, state: 'open' }) };
+      }
+      return { ok: true, status: 200, json: async () => ([]) };
+    };
+    const n = await CS.flushRequestQueue();
+    ok('it sends itself when signal returns', n === 1 && !!flushed, 'sent ' + n);
+    ok('and it sent the right one', flushed && /libero/.test(flushed.body));
+    ok('the queue is empty afterwards',
+       (await CS.Store.queueAll()).filter(x => x.kind === 'request').length === 0);
+
+    W.fetch = async () => ({ ok: false, status: 401, json: async () => ({ message: 'Bad credentials' }) });
+    let msg = '';
+    try { await CS.sendRequest('x'); } catch (e) { msg = e.message; }
+    ok('a rejected code is explained in plain words', /access code/i.test(msg), msg);
+
+    W.fetch = realFetch;
+    CS.S.requests = { token: '', who: '', sent: [] }; CS.commit();
+  }
+
+  grp('19. cleanup — put your own data back');
   /* Restoring localStorage alone is NOT enough: the app keeps an IndexedDB
      mirror and takes whichever has the higher revision on boot, so a raw
      write loses to the test data still sitting in IDB. The restore has to go

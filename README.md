@@ -30,6 +30,9 @@ Ported off the claude.ai artifact on 2026-08-25. Shares its entire design system
   lineup updates, so the court diagram stays truthful.
 - **Scout** — an opponent card per team: key players with tendencies, plus free notes.
 - **Roster** — names, numbers, positions, and a JSON backup you can move between phones.
+- **Ask for a change** — say what you want in your own words and send it. It becomes a
+  request that gets built automatically, the app updates itself, and the reply comes
+  back to this same screen. Nobody has to relay anything.
 
 Both point buttons say what the tap will do to your serve — *sideout · rotate*,
 *hold serve*, *we lose serve* — so a rotation is visible before it happens rather
@@ -77,8 +80,11 @@ installed it keep serving the version they first cached.
 
 **Everything works with the phone in airplane mode.** Opening the app, scoring,
 rotation tracking, stat logging, subs, lineups, scouting, the leaderboard, backup and
-restore. Courtside makes **zero** network calls of any kind once the shell is cached —
-there is no API, no font fetch, no analytics.
+restore. No font fetch, no analytics, no API behind any of it.
+
+The one exception is **Ask for a change**, which by its nature needs the internet. It
+degrades the same way everything else does: type it in the gym with no signal and it is
+kept on the phone and sends itself the moment there are bars.
 
 That is the whole reason for the port. The artifact failed this twice over: it loaded
 from claude.ai, so it needed a connection just to open, and it saved to
@@ -154,12 +160,12 @@ python -m http.server 8788 --bind 127.0.0.1
 # then open http://127.0.0.1:8788/tools/selftest.html
 ```
 
-**163 assertions** driving the real app in a frame: rotation geometry, sideout scoring,
+**185 assertions** driving the real app in a frame: rotation geometry, sideout scoring,
 undo-point unwinding, stat maths, saved-lineup apply/save-over, subs updating the live
 court, no sideways scroll at 320/360/390/430 px, a locked nav bar, tap targets, the
 iOS zoom rules, every screen rendering, persistence across a reload, IndexedDB rescue,
-the backup round trip, the live scoring loop, the season model and its
-migration from the old single-match save.
+the backup round trip, the live scoring loop, the season model, its migration from
+the old single-match save, and the in-app request channel.
 
 It backs your data up before it runs and restores it afterwards **through the app's own
 save path** — restoring localStorage alone is not enough, because the IndexedDB mirror
@@ -249,6 +255,40 @@ and a 56px height. A class-name collision, the same species as one found in Pass
 Renamed, with assertions on row height and cell border.
 
 ---
+
+## How "Ask for a change" works
+
+The coach types a request in the app. Nobody relays it, and nothing waits on a person:
+
+```
+app  ->  a request is filed on the repository
+     ->  that starts a build (.github/workflows/claude-requests.yml)
+     ->  Claude reads it, changes index.html, adds assertions, runs tools/check.py
+     ->  commits to main -> GitHub Pages redeploys
+     ->  replies on the request -> the reply appears back in the app
+```
+
+Guards that make it safe to leave alone:
+
+- It only acts on requests labelled `coach-request`, and never on its own comments —
+  otherwise its reply would re-trigger the build forever.
+- `concurrency: coach-requests` means one at a time, so two requests cannot race the
+  same file onto main.
+- `tools/check.py` must pass before anything is committed. The workflow is told to fix
+  the cause, never the check.
+- If the request is ambiguous it asks a plain-English question on the issue and stops,
+  rather than guessing.
+- It bumps the `CACHE` string in `sw.js`, or the coach would never see his own change.
+
+### Setup (one time, on the owner's side)
+
+1. `claude setup-token` — creates a long-lived token tied to your Claude subscription.
+2. Add it to the repository as the secret `CLAUDE_CODE_OAUTH_TOKEN`
+   (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`).
+3. Create a fine-grained GitHub token with **Issues: read and write** on this repository
+   only, and give it to the coach once. He pastes it into the app under
+   **Roster → Ask for a change**. It is stored only in his browser — it is not in this
+   file and not in this repository.
 
 ## Files
 
