@@ -668,6 +668,27 @@ function seedRoster(CS){
     }
   }
 
+  grp('17b. Roster shows the version so two phones can be compared');
+  /* The coach cannot tell from inside the app whether a phone has picked up
+     the newest build. The version shown must be the cache this phone is
+     actually running, not a hardcoded string that could drift from sw.js. */
+  {
+    const W = F().contentWindow;
+    const names = await W.caches.keys();
+    const hit = names.find((n) => n.indexOf('courtside-') === 0);
+    ok('a courtside cache exists to read a version from', !!hit, names.join(','));
+    if (hit) {
+      const expected = hit.slice('courtside-'.length);
+      ok('CS.appVersion matches the cache this phone is actually running',
+         CS.appVersion === expected, CS.appVersion + ' vs ' + expected);
+      CS.go('roster'); await sleep(200);
+      const D = F().contentDocument;
+      const txt = D.querySelector('main').textContent;
+      ok('Roster shows "Courtside · offline build · <version>"',
+         txt.indexOf('Courtside · offline build · ' + expected) >= 0, txt.slice(-80));
+    }
+  }
+
   grp('18. asking for a change from inside the app');
   /* The coach types a request here and it becomes a GitHub issue, which starts
      a build. Nobody relays it. These check the shape of what we would really

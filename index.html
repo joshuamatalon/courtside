@@ -2081,7 +2081,8 @@ function viewRoster() {
         } }, "Erase"),
         h("button", { class: "btn grow", onclick: closeModal }, "Cancel"))))
   }, "Erase all data"));
-  wrap.appendChild(h("p", { class: "note tiny center" }, "Courtside · offline build"));
+  wrap.appendChild(h("p", { class: "note tiny center" },
+    "Courtside · offline build" + (appVersion ? " · " + appVersion : "")));
   return wrap;
 }
 
@@ -2229,6 +2230,7 @@ function closeModal() { const s = $("#scrim"); if (s) s.remove(); }
 /* =============================================================== BOOT == */
 let deferredInstall = null;
 let swReady = false;
+let appVersion = "";
 
 window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredInstall = e; });
 window.addEventListener("online", () => { paintBadge(); flushRequestQueue().catch(() => {}); });
@@ -2378,6 +2380,17 @@ async function boot() {
     try { await navigator.serviceWorker.register("sw.js"); swReady = true; }
     catch (e) { swReady = false; }
   }
+
+  /* read the cache name the service worker is actually running, so this
+     phone can be compared against another rather than trusting that a
+     reload picked up the newest build */
+  if ("caches" in window) {
+    try {
+      const keys = await caches.keys();
+      const hit = keys.find((k) => k.indexOf("courtside-") === 0);
+      if (hit) { appVersion = hit.slice("courtside-".length); render(); }
+    } catch (e) {}
+  }
 }
 
 /* test surface - lets a harness assert on real state instead of pixels */
@@ -2389,6 +2402,8 @@ window.CS = {
   hitPct, passAvg, srvPct, fmt2, fmt3, pct,
   scorePoint, undoPoint, logStat, undoStat, applyLineup, playerById, curSet,
   isPlaceholderRoster, freshRoster,
+  get appVersion() { return appVersion; },
+  set appVersion(v) { appVersion = v; },
   go(tab) { V.tab = tab; render(); }
 };
 
