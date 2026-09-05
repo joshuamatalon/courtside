@@ -182,13 +182,21 @@ function seedRoster(CS){
   ok('kills and attempts accumulate', s5.kills===2 && s5.atkAtt===3, 'K'+s5.kills+' att'+s5.atkAtt);
   ok('hitting percentage is (kills − errors) ÷ attempts',
      Math.abs(CS.hitPct(s5) - (2-1)/3) < 1e-9, CS.fmt3(CS.hitPct(s5)));
-  CS.logStat('p1','3',{passSum:3,passCount:1},'Serve-receive pass');
-  CS.logStat('p1','2',{passSum:2,passCount:1},'Serve-receive pass');
+  CS.logStat('p1','3',{passSum:3,passCount:1,pass3:1},'Serve-receive pass');
+  CS.logStat('p1','2',{passSum:2,passCount:1,pass2:1},'Serve-receive pass');
   ok('pass average is the mean rating', Math.abs(CS.passAvg(CS.curSet().stats['p1']) - 2.5) < 1e-9,
      CS.fmt2(CS.passAvg(CS.curSet().stats['p1'])));
+  ok('each pass grade is counted in its own bucket',
+     CS.curSet().stats['p1'].pass3===1 && CS.curSet().stats['p1'].pass2===1 &&
+     !CS.curSet().stats['p1'].pass1 && !CS.curSet().stats['p1'].pass0,
+     JSON.stringify({p3:CS.curSet().stats['p1'].pass3, p2:CS.curSet().stats['p1'].pass2,
+       p1:CS.curSet().stats['p1'].pass1, p0:CS.curSet().stats['p1'].pass0}));
   CS.undoStat();
   ok('undo removes exactly the last stat',
      CS.curSet().stats['p1'].passCount===1 && CS.curSet().stats['p1'].passSum===3);
+  ok('undo removes the grade bucket for that pass too, not another one',
+     CS.curSet().stats['p1'].pass2===0 && CS.curSet().stats['p1'].pass3===1,
+     JSON.stringify({p3:CS.curSet().stats['p1'].pass3, p2:CS.curSet().stats['p1'].pass2}));
   ok('undo never drives a counter negative', (()=>{ for(let i=0;i<20;i++) CS.undoStat();
      const a=CS.curSet().stats['p0']||{}; return (a.kills||0)>=0 && (a.atkAtt||0)>=0; })());
 
@@ -598,11 +606,12 @@ function seedRoster(CS){
 
     /* the stat sheet: every tracked number, not just the derived ones */
     CS.M().sets[0].stats['m0'] = Object.assign(CS.emptyStat(),
-      {kills:9,atkErr:3,atkAtt:22,aces:4,srvErr:2,srvAtt:20,passSum:33,passCount:15,digs:8,blocks:2});
+      {kills:9,atkErr:3,atkAtt:22,aces:4,srvErr:2,srvAtt:20,passSum:31,passCount:15,
+       pass0:1,pass1:3,pass2:5,pass3:6,digs:8,blocks:2});
     CS.commit();
     CS.go('stats'); await sleep(300);
     const heads = [...D.querySelectorAll('.thead .tcell')].map(e=>e.textContent);
-    for (const col of ['K','E','TA','PCT','ACE','SE','TS','SRV%','RCV','AVG','D','B']) {
+    for (const col of ['K','E','TA','PCT','ACE','SE','TS','SRV%','RCV','AVG','P0','P1','P2','P3','D','B']) {
       ok('stat sheet shows ' + col, heads.indexOf(col) >= 0, heads.join(' '));
     }
     ok('attempts are shown, not just percentages',
@@ -612,6 +621,8 @@ function seedRoster(CS){
     ok('total attacks shows the real count', cells[2]==='22', cells.join('|'));
     ok('total serves shows the real count', cells[6]==='20', cells[6]);
     ok('receptions show the real count', cells[8]==='15', cells[8]);
+    ok('pass grade breakdown shows how many of each rating, not just the average',
+       cells[10]==='1' && cells[11]==='3' && cells[12]==='5' && cells[13]==='6', cells.join('|'));
     ok('a team row is present', [...D.querySelectorAll('.tname')].some(e=>e.textContent==='TEAM'));
 
     /* A full box score is wider than a phone. It scrolls in its own box, and

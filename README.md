@@ -18,9 +18,10 @@ Ported off the claude.ai artifact on 2026-08-25. Shares its entire design system
   of the six rotations you are in all track themselves. The court diagram below shows
   exactly where everyone should be standing, with the setter ringed and Zone 1 starred.
   Tap a player, tap what they just did, and it lands in that set's stats.
-- **Stats** — a full box score: K, E, TA, PCT, ACE, SE, TS, SRV%, RCV, AVG, D, B, plus
-  a team row. Every raw count is shown, not just the derived percentages — the attempts
-  behind them (TA, TS, RCV) were being tracked all along and never displayed. Scope it
+- **Stats** — a full box score: K, E, TA, PCT, ACE, SE, TS, SRV%, RCV, AVG, P0-P3, D, B,
+  plus a team row. Every raw count is shown, not just the derived percentages — the
+  attempts behind them (TA, TS, RCV) were being tracked all along and never displayed,
+  and P0-P3 break the pass average down into how many passes graded each way. Scope it
   to the current set, the match, or the whole season; the player column stays pinned
   while the table scrolls sideways.
 - **Lineup** — 5-1 / 6-2 / 4-2, the starting six in serving order, who plays what

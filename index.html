@@ -531,6 +531,7 @@ const emptyStat = () => ({
   kills: 0, atkErr: 0, atkAtt: 0,
   aces: 0, srvErr: 0, srvAtt: 0,
   passSum: 0, passCount: 0,
+  pass0: 0, pass1: 0, pass2: 0, pass3: 0,
   digs: 0, blocks: 0
 });
 const emptySet = () => ({ us: 0, them: 0, stats: {}, serving: null, rotation: 0, points: [] });
@@ -1190,10 +1191,10 @@ function viewTrack() {
         { label: "Serve in", tone: "neutral", d: { srvAtt: 1 } }
       ]},
       { name: "Serve-receive pass", grade: true, items: [
-        { label: "3", tone: "good", d: { passSum: 3, passCount: 1 } },
-        { label: "2", tone: "warn", d: { passSum: 2, passCount: 1 } },
-        { label: "1", tone: "poor", d: { passSum: 1, passCount: 1 } },
-        { label: "0", tone: "err", d: { passSum: 0, passCount: 1 } }
+        { label: "3", tone: "good", d: { passSum: 3, passCount: 1, pass3: 1 } },
+        { label: "2", tone: "warn", d: { passSum: 2, passCount: 1, pass2: 1 } },
+        { label: "1", tone: "poor", d: { passSum: 1, passCount: 1, pass1: 1 } },
+        { label: "0", tone: "err", d: { passSum: 0, passCount: 1, pass0: 1 } }
       ]},
       { name: "Defense", items: [
         { label: "Dig", tone: "acc", d: { digs: 1 } },
@@ -1427,7 +1428,11 @@ const STAT_COLS = [
   ]},
   { group: "Receive", cols: [
     { head: "RCV",  w: 44, get: (s) => s.passCount },
-    { head: "AVG",  w: 46, hi: true, get: (s) => fmt2(passAvg(s)) }
+    { head: "AVG",  w: 46, hi: true, get: (s) => fmt2(passAvg(s)) },
+    { head: "P0",   w: 34, bad: true, get: (s) => s.pass0 },
+    { head: "P1",   w: 34, get: (s) => s.pass1 },
+    { head: "P2",   w: 34, get: (s) => s.pass2 },
+    { head: "P3",   w: 34, get: (s) => s.pass3 }
   ]},
   { group: "Def",     cols: [
     { head: "D",    w: 38, get: (s) => s.digs },
@@ -1512,7 +1517,8 @@ function viewStats() {
   wrap.appendChild(h("p", { class: "note tiny" },
     "K kills · E attack errors · TA total attacks · PCT (K−E)÷TA · " +
     "ACE aces · SE missed serves · TS total serves · SRV% serves kept in play · " +
-    "RCV serve-receives · AVG pass rating 0–3 · D digs · B blocks. Swipe the table sideways for more."));
+    "RCV serve-receives · AVG pass rating 0–3 · P0/P1/P2/P3 how many passes graded each way · " +
+    "D digs · B blocks. Swipe the table sideways for more."));
 
   /* per-match summary, so the season scope is not just one merged blob */
   if (V.statView === "season" && S.matches.length > 1) {
