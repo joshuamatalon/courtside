@@ -652,6 +652,51 @@ function seedRoster(CS){
       ok('stat sheet renders in '+label+' scope', D.querySelectorAll('.trow').length>0,
          D.querySelectorAll('.trow').length+' rows');
     }
+
+    /* totaling several matches against the same opponent, e.g. "the two MOT
+       matches" - without that silently becoming the whole season */
+    CS.V.statView='match'; CS.render(); await sleep(200);
+    let segLabels = [...D.querySelectorAll('.seg .btn')].map(e=>e.textContent);
+    ok('no opponent scope offered while only one match has this opponent',
+       segLabels.indexOf('Opponent')===-1, segLabels.join('|'));
+
+    const m3 = CS.emptyMatch();
+    m3.opponent = ' southside ';
+    CS.S.matches.push(m3);
+    const m3idx = CS.S.matches.length-1;
+    CS.S.curMatch = m3idx;
+    CS.curSet().stats['m0'] = Object.assign(CS.emptyStat(), {kills:5, atkAtt:8});
+    CS.commit(); CS.render(); await sleep(200);
+    segLabels = [...D.querySelectorAll('.seg .btn')].map(e=>e.textContent);
+    ok('opponent scope appears once a second match shares the opponent name (case/space-insensitive)',
+       segLabels.indexOf('Opponent')>=0, segLabels.join('|'));
+
+    CS.V.statView='opponent'; CS.render(); await sleep(200);
+    const oppSets = CS.S.matches.filter(x=>(x.opponent||'').trim().toLowerCase()==='southside')
+      .reduce((a,x)=>a.concat(x.sets),[]);
+    const oppK = CS.sumStats(oppSets,'m0').kills;
+    const oppTA = CS.sumStats(oppSets,'m0').atkAtt;
+    ok('two matches against the same opponent were found to total', oppSets.length===2, oppSets.length);
+    const rowOpp = [...D.querySelectorAll('.trow')].find(r=>/M0/.test(r.textContent));
+    const cellsOpp = rowOpp ? [...rowOpp.querySelectorAll('.tcell')].map(e=>e.textContent) : [];
+    ok('opponent scope totals kills across both matches, not just one',
+       Number(cellsOpp[0])===oppK && oppK===14, cellsOpp.join('|')+' expected '+oppK);
+    ok('opponent scope totals attempts across both matches too',
+       Number(cellsOpp[2])===oppTA && oppTA===30, cellsOpp.join('|')+' expected '+oppTA);
+    ok('the scope note says how many matches were combined and against whom',
+       /2 matches vs/.test(D.querySelector('.note.tiny').textContent||''),
+       D.querySelector('.note.tiny').textContent);
+    ok('a list of the matches making up the total is shown, so it is never a mystery blob',
+       D.querySelectorAll('.lnrow').length===2, D.querySelectorAll('.lnrow').length);
+
+    /* season scope must still add every match, opponent grouping or not */
+    CS.V.statView='season'; CS.render(); await sleep(200);
+    const seasonK2 = CS.sumStats(CS.S.matches.reduce((a,x)=>a.concat(x.sets),[]),'m0').kills;
+    ok('season scope is unaffected by opponent grouping', seasonK2===16, 'season K'+seasonK2);
+
+    CS.S.matches.pop();
+    CS.S.curMatch = 1;
+    CS.commit();
     CS.V.statView='match'; CS.go('track'); await sleep(200);
     ok('the match bar names the current match', /Southside/.test((D.querySelector('.matchbar')||{}).textContent||''),
        (D.querySelector('.matchbar .mb-t')||{}).textContent);

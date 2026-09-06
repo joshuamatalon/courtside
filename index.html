@@ -1445,11 +1445,19 @@ function viewStats() {
   if (!S.roster.length) { wrap.appendChild(emptyCard("No players yet", "Add players to see the stat sheet.")); return wrap; }
 
   const m = M();
+  /* every match played against the same opponent, so a coach can total
+     "the two MOT matches" without that being the whole season */
+  const oppNorm = (m.opponent || "").trim().toLowerCase();
+  const oppMatches = oppNorm ? S.matches.filter((x) => (x.opponent || "").trim().toLowerCase() === oppNorm) : [];
+  const hasOpponentScope = oppMatches.length > 1;
+  if (V.statView === "opponent" && !hasOpponentScope) V.statView = "match";
+
   const scopes = [
     ["set", "Set " + (m.curSet + 1)],
-    ["match", "Match"],
-    ["season", "Season"]
+    ["match", "Match"]
   ];
+  if (hasOpponentScope) scopes.push(["opponent", "Opponent"]);
+  scopes.push(["season", "Season"]);
   const seg = h("div", { class: "seg" });
   for (const [k, l] of scopes) {
     seg.appendChild(h("button", {
@@ -1461,16 +1469,20 @@ function viewStats() {
 
   /* what the numbers cover, said out loud so a screenshot is never ambiguous */
   const seasonSets = S.matches.reduce((a, x) => a + (x.sets || []).length, 0);
+  const oppSets = oppMatches.reduce((a, x) => a + (x.sets || []).length, 0);
   const scopeNote = V.statView === "set"
     ? "Set " + (m.curSet + 1) + " of " + (m.opponent ? "the match vs " + m.opponent : "this match")
     : V.statView === "match"
       ? (m.opponent ? "All sets vs " + m.opponent : "All sets of this match") + " · " + m.date
-      : S.matches.length + " match" + (S.matches.length === 1 ? "" : "es") + " · " +
-        seasonSets + " sets · whole season";
+      : V.statView === "opponent"
+        ? oppMatches.length + " matches vs " + m.opponent + " · " + oppSets + " sets combined"
+        : S.matches.length + " match" + (S.matches.length === 1 ? "" : "es") + " · " +
+          seasonSets + " sets · whole season";
   wrap.appendChild(h("p", { class: "note tiny", style: { margin: "0 2px" } }, scopeNote));
 
   const setsFor = V.statView === "set" ? [curSet()]
     : V.statView === "match" ? m.sets
+    : V.statView === "opponent" ? oppMatches.reduce((a, x) => a.concat(x.sets || []), [])
     : S.matches.reduce((a, x) => a.concat(x.sets || []), []);
 
   const rows = S.roster.map((p) => ({ p, s: sumStats(setsFor, p.id) }));
@@ -1535,6 +1547,28 @@ function viewStats() {
         h("div", { class: "grow", style: { minWidth: "0" } },
           h("div", { class: "lnname" }, mm.opponent ? "vs " + mm.opponent : "Match " + (i + 1)),
           h("div", { class: "lnsys" }, mm.date + " · " + sc2.setsWon + "–" + sc2.setsLost +
+            " sets · " + pts + " rallies")),
+        h("span", { class: "mb-chev" }, "›")));
+    });
+    wrap.appendChild(list);
+  }
+
+  /* which matches went into the opponent total, so it is never a mystery blob */
+  if (V.statView === "opponent" && hasOpponentScope) {
+    wrap.appendChild(h("h2", { class: "sec" }, "Matches combined"));
+    const list = h("div", { class: "panel tight" });
+    oppMatches.forEach((mm) => {
+      const i = S.matches.indexOf(mm);
+      const sc2 = matchScore(mm);
+      const pts = (mm.sets || []).reduce((a, st) => a + st.us + st.them, 0);
+      list.appendChild(h("button", {
+        class: "lnrow" + (i === S.curMatch ? " on" : ""),
+        style: { width: "100%", textAlign: "left" },
+        onclick: () => { S.curMatch = i; V.statView = "match"; commit(); render(); }
+      },
+        h("div", { class: "grow", style: { minWidth: "0" } },
+          h("div", { class: "lnname" }, mm.date),
+          h("div", { class: "lnsys" }, sc2.setsWon + "–" + sc2.setsLost +
             " sets · " + pts + " rallies")),
         h("span", { class: "mb-chev" }, "›")));
     });
