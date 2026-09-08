@@ -728,6 +728,9 @@ const S = {
   matchPos: {},
   savedLineups: [],
   activeLineupId: null,
+  /* an arbitrary hand-picked set of matches for the stat sheet's Pick
+     scope, kept around rather than reset every visit */
+  pickedMatchIds: [],
   /* Asking for a change without going through anyone. The token is pasted in
      once on this phone and never leaves it - it is not in this file and not in
      the repository. */
@@ -1452,12 +1455,20 @@ function viewStats() {
   const hasOpponentScope = oppMatches.length > 1;
   if (V.statView === "opponent" && !hasOpponentScope) V.statView = "match";
 
+  /* an arbitrary hand-picked set of matches, e.g. "these three" rather than
+     everything vs one team - the pick sticks around across visits */
+  const pickedIds = Array.isArray(S.pickedMatchIds) ? S.pickedMatchIds : [];
+  const pickedMatches = S.matches.filter((x) => pickedIds.indexOf(x.id) !== -1);
+  const hasCustomScope = S.matches.length > 1;
+  if (V.statView === "custom" && !hasCustomScope) V.statView = "match";
+
   const scopes = [
     ["set", "Set " + (m.curSet + 1)],
     ["match", "Match"]
   ];
   if (hasOpponentScope) scopes.push(["opponent", "Opponent"]);
   scopes.push(["season", "Season"]);
+  if (hasCustomScope) scopes.push(["custom", "Pick"]);
   const seg = h("div", { class: "seg" });
   for (const [k, l] of scopes) {
     seg.appendChild(h("button", {
@@ -1470,19 +1481,26 @@ function viewStats() {
   /* what the numbers cover, said out loud so a screenshot is never ambiguous */
   const seasonSets = S.matches.reduce((a, x) => a + (x.sets || []).length, 0);
   const oppSets = oppMatches.reduce((a, x) => a + (x.sets || []).length, 0);
+  const pickedSets = pickedMatches.reduce((a, x) => a + (x.sets || []).length, 0);
   const scopeNote = V.statView === "set"
     ? "Set " + (m.curSet + 1) + " of " + (m.opponent ? "the match vs " + m.opponent : "this match")
     : V.statView === "match"
       ? (m.opponent ? "All sets vs " + m.opponent : "All sets of this match") + " · " + m.date
       : V.statView === "opponent"
         ? oppMatches.length + " matches vs " + m.opponent + " · " + oppSets + " sets combined"
-        : S.matches.length + " match" + (S.matches.length === 1 ? "" : "es") + " · " +
-          seasonSets + " sets · whole season";
+        : V.statView === "custom"
+          ? (pickedMatches.length
+              ? pickedMatches.length + " match" + (pickedMatches.length === 1 ? "" : "es") +
+                " picked · " + pickedSets + " sets combined"
+              : "No matches picked yet — tick them below")
+          : S.matches.length + " match" + (S.matches.length === 1 ? "" : "es") + " · " +
+            seasonSets + " sets · whole season";
   wrap.appendChild(h("p", { class: "note tiny", style: { margin: "0 2px" } }, scopeNote));
 
   const setsFor = V.statView === "set" ? [curSet()]
     : V.statView === "match" ? m.sets
     : V.statView === "opponent" ? oppMatches.reduce((a, x) => a.concat(x.sets || []), [])
+    : V.statView === "custom" ? pickedMatches.reduce((a, x) => a.concat(x.sets || []), [])
     : S.matches.reduce((a, x) => a.concat(x.sets || []), []);
 
   const rows = S.roster.map((p) => ({ p, s: sumStats(setsFor, p.id) }));
@@ -1571,6 +1589,36 @@ function viewStats() {
           h("div", { class: "lnsys" }, sc2.setsWon + "–" + sc2.setsLost +
             " sets · " + pts + " rallies")),
         h("span", { class: "mb-chev" }, "›")));
+    });
+    wrap.appendChild(list);
+  }
+
+  /* the Pick scope: tick any matches from the season, in any combination -
+     every match is listed so the coach can add or drop one in a tap, and
+     which ones are ticked is always visible, never a mystery blob */
+  if (V.statView === "custom" && hasCustomScope) {
+    wrap.appendChild(h("h2", { class: "sec" }, "Pick matches to combine"));
+    const list = h("div", { class: "panel tight" });
+    S.matches.forEach((mm, i) => {
+      const on = pickedIds.indexOf(mm.id) !== -1;
+      const sc2 = matchScore(mm);
+      const pts = (mm.sets || []).reduce((a, st) => a + st.us + st.them, 0);
+      list.appendChild(h("button", {
+        class: "lnrow" + (on ? " on" : ""),
+        style: { width: "100%", textAlign: "left" },
+        onclick: () => {
+          const ids = pickedIds.slice();
+          const at = ids.indexOf(mm.id);
+          if (at === -1) ids.push(mm.id); else ids.splice(at, 1);
+          S.pickedMatchIds = ids;
+          commit(); render();
+        }
+      },
+        h("div", { class: "grow", style: { minWidth: "0" } },
+          h("div", { class: "lnname" }, mm.opponent ? "vs " + mm.opponent : "Match " + (i + 1)),
+          h("div", { class: "lnsys" }, mm.date + " · " + sc2.setsWon + "–" + sc2.setsLost +
+            " sets · " + pts + " rallies")),
+        h("span", { class: "mb-chev" }, on ? "✓" : "")));
     });
     wrap.appendChild(list);
   }
@@ -2312,6 +2360,7 @@ function migrate(saved) {
     matchPos: saved.matchPos || {},
     savedLineups: Array.isArray(saved.savedLineups) ? saved.savedLineups : [],
     activeLineupId: saved.activeLineupId == null ? null : saved.activeLineupId,
+    pickedMatchIds: Array.isArray(saved.pickedMatchIds) ? saved.pickedMatchIds : [],
     requests: (saved.requests && typeof saved.requests === "object")
       ? { token: saved.requests.token || "", who: saved.requests.who || "",
           sent: Array.isArray(saved.requests.sent) ? saved.requests.sent : [] }

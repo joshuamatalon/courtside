@@ -694,6 +694,42 @@ function seedRoster(CS){
     const seasonK2 = CS.sumStats(CS.S.matches.reduce((a,x)=>a.concat(x.sets),[]),'m0').kills;
     ok('season scope is unaffected by opponent grouping', seasonK2===16, 'season K'+seasonK2);
 
+    /* hand-picking an arbitrary set of matches - "these two", not tied to
+       opponent at all, e.g. Northern (idx0) and the second Southside (idx2) */
+    CS.S.pickedMatchIds = [CS.S.matches[0].id, CS.S.matches[2].id];
+    CS.commit();
+    CS.V.statView='custom'; CS.render(); await sleep(200);
+    segLabels = [...D.querySelectorAll('.seg .btn')].map(e=>e.textContent);
+    ok('a Pick scope is offered once more than one match exists', segLabels.indexOf('Pick')>=0, segLabels.join('|'));
+
+    const pickedSets = [CS.S.matches[0], CS.S.matches[2]].reduce((a,x)=>a.concat(x.sets),[]);
+    const pickK = CS.sumStats(pickedSets,'m0').kills;
+    const pickTA = CS.sumStats(pickedSets,'m0').atkAtt;
+    const rowPick = [...D.querySelectorAll('.trow')].find(r=>/M0/.test(r.textContent));
+    const cellsPick = rowPick ? [...rowPick.querySelectorAll('.tcell')].map(e=>e.textContent) : [];
+    ok('picked scope totals only the ticked matches, not the whole season',
+       Number(cellsPick[0])===pickK && pickK===7, cellsPick.join('|')+' expected '+pickK);
+    ok('picked scope totals attempts for just those matches too',
+       Number(cellsPick[2])===pickTA && pickTA===10, cellsPick.join('|')+' expected '+pickTA);
+    ok('the scope note says how many matches were picked',
+       /2 matches picked/.test(D.querySelector('.note.tiny').textContent||''),
+       D.querySelector('.note.tiny').textContent);
+    ok('every match is listed to tick, not just the picked ones',
+       D.querySelectorAll('.lnrow').length===3, D.querySelectorAll('.lnrow').length);
+    ok('exactly the two picked rows are marked on',
+       D.querySelectorAll('.lnrow.on').length===2, D.querySelectorAll('.lnrow.on').length);
+
+    /* tapping an unticked row picks it, and the pick survives leaving and
+       returning to the stat sheet - the coach should not have to redo it */
+    const offRow = [...D.querySelectorAll('.lnrow')].find(r=>!r.classList.contains('on'));
+    offRow.click(); await sleep(200);
+    ok('tapping a match row adds it to the picked set', CS.S.pickedMatchIds.length===3,
+       CS.S.pickedMatchIds.length);
+    CS.go('track'); await sleep(150);
+    CS.go('stats'); CS.V.statView='custom'; CS.render(); await sleep(200);
+    ok('the picked set survives leaving and returning to the stat sheet',
+       CS.S.pickedMatchIds.length===3, CS.S.pickedMatchIds.length);
+
     CS.S.matches.pop();
     CS.S.curMatch = 1;
     CS.commit();
