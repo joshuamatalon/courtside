@@ -5,7 +5,7 @@
 /* Bump this string to push an update to installed phones. Changing sw.js at
    all is what makes the browser re-check it; the activate handler then drops
    every older cache. */
-const CACHE = "courtside-v8";
+const CACHE = "courtside-v9";
 const SHELL = [
   "./",
   "./index.html",

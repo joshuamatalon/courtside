@@ -796,6 +796,37 @@ function seedRoster(CS){
     ok('the panel is there', /Ask for a change/.test(D.querySelector('main').textContent));
     ok('it will not send until a code is stored', !box());
 
+    /* The public app shows this panel to anyone. A guessed code, or a code
+       that belongs to some other account, must leave it locked; only the
+       owner's code opens it, and only after GitHub has said whose it is. */
+    {
+      const codeBox = () => D.querySelector('main input.mono[type=password]');
+      const saveBtn = () => [...D.querySelectorAll('.btn.solid.wide')]
+        .find(b => b.textContent === 'Save');
+      const keep = W.fetch;
+      let asked = 0;
+      W.fetch = async (url, opts) => {
+        asked++;
+        const auth = opts && opts.headers && opts.headers.Authorization;
+        if (/\/user$/.test(String(url))) {
+          if (auth === 'Bearer OWNERCODE') return { ok: true, status: 200, json: async () => ({ login: CS.REPO.split('/')[0] }) };
+          if (auth === 'Bearer THEIRCODE') return { ok: true, status: 200, json: async () => ({ login: 'someone-else' }) };
+          return { ok: false, status: 401, json: async () => ({ message: 'Bad credentials' }) };
+        }
+        return { ok: true, status: 200, json: async () => ([]) };
+      };
+      ok('there is a place to paste the code', !!codeBox());
+      codeBox().value = 'guess'; saveBtn().click(); await sleep(400);
+      ok('a guessed code is checked, not trusted', asked === 1, asked + ' calls');
+      ok('a guessed code does not unlock the request box', !box() && !CS.S.requests.token);
+      ok('and it says so in plain words', /not recognised/i.test(D.querySelector('main').textContent));
+      codeBox().value = 'THEIRCODE'; saveBtn().click(); await sleep(400);
+      ok("someone else's code does not unlock it either", !box() && !CS.S.requests.token);
+      codeBox().value = 'OWNERCODE'; saveBtn().click(); await sleep(400);
+      ok("the owner's code unlocks it", !!box() && CS.S.requests.token === 'OWNERCODE');
+      W.fetch = keep;
+    }
+
     CS.S.requests = { token: 'TESTCODE', who: 'Coach', sent: [] };
     CS.commit(); CS.go('roster'); await sleep(350);
     ok('with a code, the request box appears', !!box());
