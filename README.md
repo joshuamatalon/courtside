@@ -273,6 +273,12 @@ Guards that make it safe to leave alone:
 
 - It only acts on requests labelled `coach-request`, and never on its own comments —
   otherwise its reply would re-trigger the build forever.
+- It only acts on issues and comments authored by the repository owner. The app files
+  under the owner's token, so that is every real request; the repository is public and
+  nothing anyone else posts can start a build.
+- The app checks the access code with GitHub before storing it, and accepts only the
+  owner's. Anyone can open the app and see the panel; without the code, nothing on it
+  works.
 - `concurrency: coach-requests` means one at a time, so two requests cannot race the
   same file onto main.
 - `tools/check.py` must pass before anything is committed. The workflow is told to fix

@@ -33,12 +33,16 @@ jobs:
     # otherwise the reply it posts re-triggers this workflow forever. Everything
     # this workflow posts goes out as github-actions[bot], so the acknowledgement
     # and the fallback reply below are both caught by this same filter.
+    # The app files under the owner's token, so the issue and any follow-up
+    # comment must be authored by the repository owner; the repository is
+    # public and nothing anyone else posts may start a build.
     if: >
-      (github.event_name == 'issues' &&
-       contains(join(github.event.issue.labels.*.name, ','), 'coach-request')) ||
-      (github.event_name == 'issue_comment' &&
-       github.event.comment.user.type != 'Bot' &&
-       contains(join(github.event.issue.labels.*.name, ','), 'coach-request'))
+      contains(join(github.event.issue.labels.*.name, ','), 'coach-request') &&
+      github.event.issue.user.login == github.repository_owner &&
+      (github.event_name == 'issues' ||
+       (github.event_name == 'issue_comment' &&
+        github.event.comment.user.type != 'Bot' &&
+        github.event.comment.user.login == github.repository_owner))
     runs-on: ubuntu-latest
     # Generous, because the concurrency group already serialises runs - nothing
     # is waiting on this but the coach, and he would rather wait than be told a
