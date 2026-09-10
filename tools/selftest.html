@@ -200,6 +200,23 @@ function seedRoster(CS){
   ok('undo never drives a counter negative', (()=>{ for(let i=0;i<20;i++) CS.undoStat();
      const a=CS.curSet().stats['p0']||{}; return (a.kills||0)>=0 && (a.atkAtt||0)>=0; })());
 
+  /* assists, dig errors and block errors */
+  seedRoster(CS); CS.go('track'); await sleep(150);
+  CS.logStat('p2','Assist',{assists:1},'Set');
+  CS.logStat('p2','Assist',{assists:1},'Set');
+  CS.logStat('p3','Dig',{digs:1},'Defense');
+  CS.logStat('p3','Dig error',{digErr:1},'Defense');
+  CS.logStat('p3','Block',{blocks:1},'Defense');
+  CS.logStat('p3','Block error',{blockErr:1},'Defense');
+  ok('assists accumulate', CS.curSet().stats['p2'].assists===2, 'AST'+CS.curSet().stats['p2'].assists);
+  const s5b = CS.curSet().stats['p3'];
+  ok('dig errors and block errors are counted separately from dig/block makes',
+     s5b.digs===1 && s5b.digErr===1 && s5b.blocks===1 && s5b.blockErr===1,
+     JSON.stringify({digs:s5b.digs, digErr:s5b.digErr, blocks:s5b.blocks, blockErr:s5b.blockErr}));
+  CS.undoStat();
+  ok('undo removes a block error without touching the block make',
+     CS.curSet().stats['p3'].blockErr===0 && CS.curSet().stats['p3'].blocks===1);
+
   /* match totals must add the sets, not just show one */
   seedRoster(CS);
   CS.M().sets = [CS.emptySet(), CS.emptySet()];
@@ -607,11 +624,11 @@ function seedRoster(CS){
     /* the stat sheet: every tracked number, not just the derived ones */
     CS.M().sets[0].stats['m0'] = Object.assign(CS.emptyStat(),
       {kills:9,atkErr:3,atkAtt:22,aces:4,srvErr:2,srvAtt:20,passSum:31,passCount:15,
-       pass0:1,pass1:3,pass2:5,pass3:6,digs:8,blocks:2});
+       pass0:1,pass1:3,pass2:5,pass3:6,assists:5,digs:8,digErr:1,blocks:2,blockErr:1});
     CS.commit();
     CS.go('stats'); await sleep(300);
     const heads = [...D.querySelectorAll('.thead .tcell')].map(e=>e.textContent);
-    for (const col of ['K','E','TA','PCT','ACE','SE','TS','SRV%','RCV','AVG','P0','P1','P2','P3','D','B']) {
+    for (const col of ['K','E','TA','PCT','ACE','SE','TS','SRV%','RCV','AVG','P0','P1','P2','P3','AST','D','DE','B','BE']) {
       ok('stat sheet shows ' + col, heads.indexOf(col) >= 0, heads.join(' '));
     }
     ok('attempts are shown, not just percentages',
@@ -623,6 +640,9 @@ function seedRoster(CS){
     ok('receptions show the real count', cells[8]==='15', cells[8]);
     ok('pass grade breakdown shows how many of each rating, not just the average',
        cells[10]==='1' && cells[11]==='3' && cells[12]==='5' && cells[13]==='6', cells.join('|'));
+    ok('assists, digs, dig errors, blocks and block errors show their real counts',
+       cells[14]==='5' && cells[15]==='8' && cells[16]==='1' && cells[17]==='2' && cells[18]==='1',
+       cells.join('|'));
     ok('a team row is present', [...D.querySelectorAll('.tname')].some(e=>e.textContent==='TEAM'));
 
     /* A full box score is wider than a phone. It scrolls in its own box, and
