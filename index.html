@@ -787,7 +787,7 @@ const playerById = (id) => S.roster.find((p) => p.id === id) || null;
 const statFor = (set, pid) => (set.stats[pid] || emptyStat());
 
 /* =============================================================== VIEWS == */
-const V = { tab: "track", editLineup: false, selected: null, subOut: null, scoutId: null, rotBrowse: 0, statView: "match" };
+const V = { tab: "track", editLineup: false, selected: null, subOut: null, scoutId: null, rotBrowse: 0, statView: "match", statCompact: false };
 let quickSlot = null;
 
 function stat(label, value) {
@@ -1455,6 +1455,11 @@ const STAT_COLS = [
   ]}
 ];
 
+/* the four headline counts, narrow enough to sit on screen together with
+   no sideways swipe needed - the ask was specifically to see blocks and
+   assists without sliding over for them */
+const STAT_COLS_COMPACT_HEADS = ["K", "AST", "D", "B"];
+
 function viewStats() {
   const wrap = h("div", { class: "stack" });
   if (!S.roster.length) { wrap.appendChild(emptyCard("No players yet", "Add players to see the stat sheet.")); return wrap; }
@@ -1516,7 +1521,22 @@ function viewStats() {
     : S.matches.reduce((a, x) => a.concat(x.sets || []), []);
 
   const rows = S.roster.map((p) => ({ p, s: sumStats(setsFor, p.id) }));
-  const flat = STAT_COLS.reduce((a, g) => a.concat(g.cols), []);
+
+  /* Key stats shows one narrow column per headline number so it never
+     needs a sideways swipe; Full is the complete box score, which does. */
+  const compactSeg = h("div", { class: "seg" });
+  for (const [k, l] of [[true, "Key stats"], [false, "Full"]]) {
+    compactSeg.appendChild(h("button", {
+      class: "btn" + (V.statCompact === k ? " solid" : ""),
+      onclick: () => { V.statCompact = k; render(); }
+    }, l));
+  }
+  wrap.appendChild(compactSeg);
+
+  const visGroups = STAT_COLS
+    .map((g) => ({ group: g.group, cols: V.statCompact ? g.cols.filter((c) => STAT_COLS_COMPACT_HEADS.indexOf(c.head) !== -1) : g.cols }))
+    .filter((g) => g.cols.length);
+  const flat = visGroups.reduce((a, g) => a.concat(g.cols), []);
 
   const box = h("div", { class: "panel tight" });
   const inner = h("div", { class: "tablewrap" });
@@ -1524,7 +1544,7 @@ function viewStats() {
   /* group banner above the column heads */
   const gRow = h("div", { class: "grpcols" },
     h("span", { class: "tname", style: { minWidth: "84px" } }, ""));
-  for (const g of STAT_COLS) {
+  for (const g of visGroups) {
     const w = g.cols.reduce((a, c) => a + c.w, 0);
     gRow.appendChild(h("span", { class: "g", style: { width: (w - 6) + "px", flex: "none" } }, g.group));
   }
@@ -1556,11 +1576,12 @@ function viewStats() {
   box.appendChild(inner);
   wrap.appendChild(box);
 
-  wrap.appendChild(h("p", { class: "note tiny" },
-    "K kills · E attack errors · TA total attacks · PCT (K−E)÷TA · " +
-    "ACE aces · SE missed serves · TS total serves · SRV% serves kept in play · " +
-    "RCV serve-receives · AVG pass rating 0–3 · P0/P1/P2/P3 how many passes graded each way · " +
-    "AST assists · D digs · DE dig errors · B blocks · BE block errors. Swipe the table sideways for more."));
+  wrap.appendChild(h("p", { class: "note tiny" }, V.statCompact
+    ? "K kills · AST assists · D digs · B blocks. Tap Full for every stat, including errors and percentages."
+    : "K kills · E attack errors · TA total attacks · PCT (K−E)÷TA · " +
+      "ACE aces · SE missed serves · TS total serves · SRV% serves kept in play · " +
+      "RCV serve-receives · AVG pass rating 0–3 · P0/P1/P2/P3 how many passes graded each way · " +
+      "AST assists · D digs · DE dig errors · B blocks · BE block errors. Swipe the table sideways for more."));
 
   /* per-match summary, so the season scope is not just one merged blob */
   if (V.statView === "season" && S.matches.length > 1) {

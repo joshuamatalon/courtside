@@ -666,6 +666,26 @@ function seedRoster(CS){
       tw.scrollLeft = 0; await sleep(200);
     }
 
+    /* Key stats: the ask was to see blocks and assists without sliding
+       over for them. It swaps in four narrow columns that fit without a
+       sideways swipe, rather than trimming the full box score away. */
+    {
+      const compactBtn = [...D.querySelectorAll('.seg .btn')].find(b=>b.textContent==='Key stats');
+      ok('a Key stats toggle exists on the stat sheet', !!compactBtn);
+      compactBtn.click(); await sleep(200);
+      const headsC = [...D.querySelectorAll('.thead .tcell')].map(e=>e.textContent);
+      ok('key stats shows kills, assists, digs and blocks',
+         headsC.join(',')==='K,AST,D,B', headsC.join(','));
+      const twC = D.querySelector('.tablewrap');
+      ok('key stats fits without a sideways swipe',
+         twC.scrollWidth <= twC.clientWidth+1, twC.scrollWidth+' vs '+twC.clientWidth);
+      const fullBtn = [...D.querySelectorAll('.seg .btn')].find(b=>b.textContent==='Full');
+      fullBtn.click(); await sleep(200);
+      ok('Full switches back to the complete box score',
+         D.querySelectorAll('.thead .tcell').length===19,
+         D.querySelectorAll('.thead .tcell').length);
+    }
+
     /* the three scopes */
     for (const [k,label] of [['set','set'],['match','match'],['season','season']]) {
       CS.V.statView = k; CS.render(); await sleep(200);
